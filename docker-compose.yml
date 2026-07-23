@@ -1,12 +1,9 @@
-version: "3.8"
-
 services:
   mongodb:
     image: mongo:7
     container_name: wuyan-mongo
     restart: unless-stopped
-    ports:
-      - "27017:27017"
+    # MongoDB 仅容器内通信，不暴露外网端口
     volumes:
       - mongo-data:/data/db
     environment:
@@ -59,7 +56,7 @@ services:
     container_name: wuyan-api
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "19091:3000"
     env_file:
       - ./.env
     environment:
