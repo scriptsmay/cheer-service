@@ -23,6 +23,7 @@ const configRoute = require('./routes/config');
 const cheerRoute = require('./routes/cheer');
 const askRoute = require('./routes/ask');
 const checkinRoute = require('./routes/checkin');
+const adminRoute = require('./routes/admin');
 
 // 定时任务
 const { startScheduler } = require('./jobs/scheduler');
@@ -51,6 +52,8 @@ app.use('/api/heroes', heroesRoute);
 app.use('/api/cheer', contentFilterMiddleware, cheerRoute);
 app.use('/api/ask', contentFilterMiddleware, askRoute);
 app.use('/api/checkins', checkinRoute);
+// 运维接口
+app.use('/api/admin', adminRoute);
 
 // ── 健康检查 ──
 app.get('/api/health', async (req, res) => {

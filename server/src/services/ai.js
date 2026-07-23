@@ -7,7 +7,7 @@
  * 所有参数通过环境变量配置，可灵活切换 DeepSeek / OpenAI / 本地 Ollama 等
  */
 
-const config = require('../config/env');
+const { getEffectiveConfig } = require('./ai-config');
 
 /**
  * 调用 OpenAI 兼容的 /chat/completions 端点
@@ -18,8 +18,10 @@ const config = require('../config/env');
  * @returns {Promise<{text: string, usage: Object}>}
  */
 async function generateText({ messages, temperature = 0.85, jsonMode = false }) {
+  const { baseUrl, apiKey, model } = getEffectiveConfig();
+
   const body = {
-    model: config.aiModel,
+    model,
     messages,
     temperature,
   };
@@ -28,14 +30,14 @@ async function generateText({ messages, temperature = 0.85, jsonMode = false }) 
     body.response_format = { type: 'json_object' };
   }
 
-  const response = await fetch(`${config.aiBaseUrl}/chat/completions`, {
+  const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${config.aiApiKey}`,
+      'Authorization': `Bearer ${apiKey}`,
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(60000),
   });
 
   if (!response.ok) {
@@ -44,8 +46,10 @@ async function generateText({ messages, temperature = 0.85, jsonMode = false }) 
   }
 
   const data = await response.json();
+  const msg = data.choices?.[0]?.message;
   return {
-    text: data.choices?.[0]?.message?.content || '',
+    // 部分模型（如 LongCat）在 json_object 模式下把输出放到 reasoning_content
+    text: msg?.content || msg?.reasoning_content || '',
     usage: {
       total_tokens: data.usage?.total_tokens || 0,
       prompt_tokens: data.usage?.prompt_tokens || 0,
