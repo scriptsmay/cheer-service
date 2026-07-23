@@ -57,14 +57,18 @@ services:
     restart: unless-stopped
     ports:
       - "19091:3000"
+    volumes:
+      - api-data:/app/data
     env_file:
       - ./.env
     environment:
       - MONGO_URI=mongodb://wuyan:${MONGO_PASSWORD:-changeme_strong_password}@mongodb:27017/wuyan?authSource=admin&replicaSet=rs0
       - TZ=Asia/Shanghai
+      - SYNC_API_KEY=${SYNC_API_KEY:-}
     depends_on:
       mongodb:
         condition: service_healthy
 
 volumes:
   mongo-data:
+  api-data:

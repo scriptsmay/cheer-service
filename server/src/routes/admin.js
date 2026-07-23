@@ -1,23 +1,201 @@
 'use strict';
 
 /**
- * /api/admin — 运维管理（需登录）
+ * /api/admin — 运维管理（需登录）+ 数据同步（API Key）
  *
  * GET  /api/admin              — 管理页面 (HTML，含登录表单)
  * GET  /api/admin/ai/config    — 查看当前 AI 配置（脱敏）[需登录]
  * PUT  /api/admin/ai/config    — 更新 AI 配置（持久化到 /app/data/ai-config.json）[需登录]
  * POST /api/admin/ai/test      — 测试 AI 连通性 [需登录]
+ * POST /api/admin/sync/overview — 接收赛季概览数据（kpl-data-daily 推送）[API Key]
+ * POST /api/admin/sync/schedule — 接收赛程数据（kpl-data-daily 推送）[API Key]
  */
 
 const express = require('express');
 const router = express.Router();
 const { getEffectiveConfig, saveConfig } = require('../services/ai-config');
+const { collection } = require('../db/mongo');
+const config = require('../config/env');
+const crypto = require('crypto');
 
 // ── 鉴权守卫：硬拦截 ──
 function requireAuth(req, res, next) {
   if (req.identity && req.identity.ok) return next();
   return res.status(401).json({ code: 'UNAUTHORIZED', message: '请先登录' });
 }
+
+// ── 数据同步鉴权（API Key）──
+function requireSyncKey(req, res, next) {
+  const key = req.headers['x-sync-key'] || '';
+  if (config.syncApiKey && key === config.syncApiKey) return next();
+  return res.status(401).json({ code: 'UNAUTHORIZED', message: 'Invalid sync key' });
+}
+
+// ── 辅助函数 ──
+function md5(str) { return crypto.createHash('md5').update(str).digest('hex'); }
+
+function extractMetrics(overview, seasonId) {
+  const data = overview.data || overview;
+  const summary = data.career_summary || {};
+  const seasonStats = Array.isArray(data.season_stats) ? data.season_stats : [];
+  const season = seasonStats.find((s) => s.season_id === seasonId) || data.current_season || {};
+  return {
+    win_rate: season.win_rate ?? summary.win_rate ?? 0,
+    kda_ratio: season.kda_ratio ?? summary.kda_ratio ?? 0,
+    battles: season.battles ?? summary.total_matches ?? 0,
+    mvp: season.mvp ?? summary.mvp_count ?? 0,
+    wins: season.wins ?? 0, loses: season.loses ?? 0,
+    avg_kills: season.avg_kills ?? 0, avg_deaths: season.avg_deaths ?? 0, avg_assists: season.avg_assists ?? 0,
+  };
+}
+
+// ═══════════════════════════════════════════════
+// 数据同步接口（API Key 鉴权）
+// ═══════════════════════════════════════════════
+
+// POST /api/admin/sync/overview — 接收赛季概览数据并写入 MongoDB
+router.post('/sync/overview', requireSyncKey, async (req, res) => {
+  try {
+    const { season, overview } = req.body;
+    if (!season || !overview) {
+      return res.status(400).json({ ok: false, error: '缺少 season 或 overview 字段' });
+    }
+
+    const playerInfo = overview.data?.player_info || overview;
+    console.log(`[sync-api] Received overview for season=${season}, player=${playerInfo.latest_nickname || 'unknown'}`);
+
+    // 防御：从 hero_stats 重新计算 hero_top
+    if (overview.data && overview.data.hero_stats) {
+      overview.hero_top = overview.data.hero_stats.map((h) => ({
+        hero_name: h.hero_name, battles: h.battles, win_rate: h.win_rate,
+      }));
+    }
+
+    // 1. Upsert season_summaries
+    const summaryDoc = {
+      season,
+      season_name: overview.data?.career_summary?.last_season_id || season,
+      player_name: playerInfo.latest_nickname || 'unknown',
+      team_name: playerInfo.latest_team || 'unknown',
+      data: overview,
+      updated_at: new Date().toISOString(),
+    };
+    const col = await collection('season_summaries');
+    const existing = await col.where({ season }).get();
+    if (existing.data.length > 0) {
+      await col.doc(existing.data[0]._id).update(summaryDoc);
+    } else {
+      await col.add(summaryDoc);
+    }
+
+    // 2. 写入每日赛季快照
+    const today = new Date().toISOString().split('T')[0];
+    const metrics = extractMetrics(overview, season);
+    const overviewHash = md5(JSON.stringify(metrics));
+    const snapshotDoc = {
+      date: today, season_id: season, overview_hash: overviewHash,
+      metrics, created_at: new Date().toISOString(),
+    };
+    const snapCol = await collection('season_snapshots');
+    const snapExisting = await snapCol.where({ date: today, season_id: season }).get();
+    if (snapExisting.data.length > 0) {
+      await snapCol.doc(snapExisting.data[0]._id).update(snapshotDoc);
+    } else {
+      await snapCol.add(snapshotDoc);
+    }
+
+    // 3. 清理 90 天前的旧快照
+    const cutoffDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const oldSnaps = await snapCol.where({ date: { $lte: cutoffDate } }).get();
+    for (const s of oldSnaps.data) {
+      await snapCol.doc(s._id).remove();
+    }
+    if (oldSnaps.data.length > 0) {
+      console.log(`[sync-api] Cleaned ${oldSnaps.data.length} old snapshots before ${cutoffDate}`);
+    }
+
+    // 4. 记录同步快照
+    const syncCol = await collection('sync_snapshots');
+    await syncCol.add({
+      season, type: 'daily', status: 'success',
+      source: 'push-api:overview',
+      updated_at: new Date().toISOString(),
+    });
+
+    console.log(`[sync-api] Overview sync complete: season=${season}`);
+    res.json({ ok: true, season, synced: ['season_summaries', 'season_snapshots', 'sync_snapshots'] });
+  } catch (err) {
+    console.error('[sync-api] Overview sync error:', err.message, err.stack);
+    try {
+      const syncCol = await collection('sync_snapshots');
+      await syncCol.add({
+        season: req.body?.season || 'unknown', type: 'daily', status: 'error',
+        error: err.message, updated_at: new Date().toISOString(),
+      });
+    } catch (_) {}
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /api/admin/sync/schedule — 接收赛程数据并写入 MongoDB
+router.post('/sync/schedule', requireSyncKey, async (req, res) => {
+  try {
+    const { season, schedule } = req.body;
+    if (!season || !schedule) {
+      return res.status(400).json({ ok: false, error: '缺少 season 或 schedule 字段' });
+    }
+
+    const matches = schedule.matches || [];
+    console.log(`[sync-api] Received schedule for season=${season}, matches=${matches.length}`);
+
+    if (matches.length === 0) {
+      // 记录跳过状态
+      const syncCol = await collection('sync_snapshots');
+      await syncCol.add({
+        season, type: 'schedule', status: 'skipped',
+        error: 'schedule has no matches', source: 'push-api:schedule',
+        updated_at: new Date().toISOString(),
+      });
+      return res.json({ ok: true, season, status: 'skipped', message: 'No matches in schedule' });
+    }
+
+    const { mergeScheduleMatches, recordSyncSnapshot } = require('../lib/schedule-merge');
+
+    const seasonName = schedule.season_name || season;
+    for (const m of matches) { if (!m.season_name) m.season_name = seasonName; }
+
+    const sourceFetchedAt = schedule.updated_at || new Date().toISOString();
+    const mergeResult = await mergeScheduleMatches(season, matches, {
+      isFullSync: true, isLive: false, sourceFetchedAt,
+      sourceStatus: schedule.source_status || 'ok', maxRetries: 3,
+    });
+
+    const status = mergeResult.action === 'skipped' ? 'skipped'
+      : mergeResult.action === 'no_change' ? 'no_change' : 'success';
+
+    await recordSyncSnapshot({
+      type: 'schedule', season, status,
+      matchedCount: mergeResult.matchedCount, changedCount: mergeResult.changedCount,
+      sourceFetchedAt, error: mergeResult.fallbackUsed ? 'fallback merge key used' : null,
+    });
+
+    console.log(`[sync-api] Schedule sync complete: season=${season}, status=${status}, changed=${mergeResult.changedCount}`);
+    res.json({
+      ok: true, season, status,
+      matched_count: mergeResult.matchedCount, changed_count: mergeResult.changedCount,
+    });
+  } catch (err) {
+    console.error('[sync-api] Schedule sync error:', err.message, err.stack);
+    try {
+      const syncCol = await collection('sync_snapshots');
+      await syncCol.add({
+        season: req.body?.season || 'unknown', type: 'schedule', status: 'error',
+        error: err.message, source: 'push-api:schedule', updated_at: new Date().toISOString(),
+      });
+    } catch (_) {}
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
 
 // ── 管理页面（无需鉴权，页面内自带登录逻辑）──
 router.get('/', (req, res) => {

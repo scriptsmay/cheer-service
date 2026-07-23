@@ -41,8 +41,11 @@ const config = {
   // 限流
   ipHashSalt: process.env.IP_HASH_SALT || 'default_salt',
 
-  // 数据同步源
+  // 数据同步源（HTTP pull 模式，保留作为备用）
   dataBaseUrl: process.env.DATA_BASE_URL || 'https://cal.kplwuyan.site',
+
+  // 数据同步 API Key（push 模式，kpl-data-daily GitHub Actions 推送用）
+  syncApiKey: process.env.SYNC_API_KEY || '',
 
   // 服务端口
   port: parseInt(process.env.PORT || '3000', 10),
