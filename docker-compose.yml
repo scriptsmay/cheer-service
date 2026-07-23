@@ -1,0 +1,73 @@
+version: "3.8"
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: wuyan-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: wuyan
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-changeme_strong_password}
+    entrypoint:
+      - bash
+      - -c
+      - |
+        if [ ! -f /data/db/keyfile ]; then
+          openssl rand -base64 756 > /data/db/keyfile
+          chmod 400 /data/db/keyfile
+        fi
+        exec docker-entrypoint.sh mongod --auth --replSet rs0 --keyFile /data/db/keyfile --bind_ip_all
+    healthcheck:
+      test: >
+        mongosh --quiet --eval "
+          try {
+            const s = rs.status();
+            if (s.ok === 1) { quit(0) } else { quit(1) }
+          } catch(e) {
+            if (e.codeName === 'NotYetInitialized') {
+              rs.initiate({_id:'rs0',members:[{_id:0,host:'mongodb:27017'}]});
+            }
+            quit(1)
+          }
+        " --username wuyan --password ${MONGO_PASSWORD:-changeme_strong_password} --authenticationDatabase admin
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+
+  mongo-init:
+    image: mongo:7
+    container_name: wuyan-mongo-init
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    entrypoint:
+      - mongosh
+      - mongodb://wuyan:${MONGO_PASSWORD:-changeme_strong_password}@mongodb:27017/admin?authSource=admin&replicaSet=rs0
+      - --eval
+      - "db.getSiblingDB('wuyan'); quit(0)"
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: wuyan-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - ./.env
+    environment:
+      - MONGO_URI=mongodb://wuyan:${MONGO_PASSWORD:-changeme_strong_password}@mongodb:27017/wuyan?authSource=admin&replicaSet=rs0
+      - TZ=Asia/Shanghai
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+volumes:
+  mongo-data:

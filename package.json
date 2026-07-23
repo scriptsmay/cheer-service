@@ -1,0 +1,24 @@
+{
+  "name": "cheer-service",
+  "version": "1.0.0",
+  "description": "Wuyan KPL cheer backend - migrated from TCB cloud functions to Express + MongoDB",
+  "type": "commonjs",
+  "main": "server/src/app.js",
+  "scripts": {
+    "start": "node --env-file=.env server/src/app.js",
+    "dev": "node --env-file=.env --watch server/src/app.js",
+    "migrate": "node scripts/migrate-data.js",
+    "test": "node --test server/tests/*.test.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongodb": "^6.12.0",
+    "node-cron": "^3.0.3",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
