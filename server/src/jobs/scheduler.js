@@ -5,29 +5,12 @@
  */
 
 const cron = require('node-cron');
-const { syncData } = require('./syncData');
-const { syncLive } = require('./syncLive');
-const { syncSchedule } = require('./syncSchedule');
 const { syncScheduleLive } = require('./syncScheduleLive');
 const { weeklyStory } = require('./weeklyStory');
 const { cleanupAiReports } = require('./cleanupAiReports');
 
+
 function startScheduler() {
-  // TCB cron: "0 0 4 * * * *" (秒分时日月周) → node-cron: "0 4 * * *" (分时日月周)
-  cron.schedule('0 4 * * *', async () => {
-    console.log('[scheduler] Running syncData at 04:00');
-    try { await syncData(); } catch (e) { console.error('[scheduler] syncData error:', e.message); }
-  });
-
-  cron.schedule('0 5 * * *', async () => {
-    console.log('[scheduler] Running syncLive at 05:00');
-    try { await syncLive(); } catch (e) { console.error('[scheduler] syncLive error:', e.message); }
-  });
-
-  cron.schedule('0 6 * * *', async () => {
-    console.log('[scheduler] Running syncSchedule at 06:00');
-    try { await syncSchedule(); } catch (e) { console.error('[scheduler] syncSchedule error:', e.message); }
-  });
 
   cron.schedule('*/10 * * * *', async () => {
     console.log('[scheduler] Running syncScheduleLive every 10 min');

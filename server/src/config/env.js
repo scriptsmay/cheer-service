@@ -41,8 +41,11 @@ const config = {
   // 限流
   ipHashSalt: process.env.IP_HASH_SALT || 'default_salt',
 
-  // 数据同步源（HTTP pull 模式，保留作为备用）
-  dataBaseUrl: process.env.DATA_BASE_URL || 'https://cal.kplwuyan.site',
+  // 数据同步源（HTTP pull 模式，已禁用）
+  // 原默认值 https://cal.kplwuyan.site 域名不存在且从未生效，
+  // 实际数据通过 GH Actions POST /api/admin/sync/* 推送。
+  // 迁移后将改为容器内本地文件读取，见 docs/kpl-crawl-migration.md
+  dataBaseUrl: process.env.DATA_BASE_URL || '',
 
   // 数据同步 API Key（push 模式，kpl-data-daily GitHub Actions 推送用）
   syncApiKey: process.env.SYNC_API_KEY || '',
