@@ -1,14 +1,16 @@
 'use strict';
 
 /**
- * syncData job — ← sync-data
- * 每日 04:00，从数据源拉取赛季概览数据写入 MongoDB
- * 替代 TCB 云函数从云存储下载，改为从外部 HTTP API 获取
+ * syncData job
+ * 每日 04:00，从本地 kpl-data-daily 数据目录读取赛季概览写入 MongoDB
  */
 
+const fs = require('fs');
+const path = require('path');
 const { collection } = require('../db/mongo');
-const config = require('../config/env');
 const crypto = require('crypto');
+
+const KPL_DATA_DIR = process.env.KPL_DATA_DIR || '/app/kpl-data-daily';
 
 async function syncData() {
   const results = { season: null, synced: [], skipped: [], errors: [] };
@@ -90,7 +92,7 @@ async function syncData() {
     const syncCol = await collection('sync_snapshots');
     await syncCol.add({
       season, type: 'daily', status: 'success',
-      source: `http-api:data/derived/${season}/overview.json`,
+      source: `local:data/derived/${season}/overview.json`,
       updated_at: new Date().toISOString(),
     });
     results.synced.push('sync_snapshots');
@@ -107,15 +109,13 @@ async function syncData() {
   return results;
 }
 
-async function fetchData(path) {
-  const url = `${config.dataBaseUrl}/${path}`;
-  console.log(`[sync] Fetching: ${path}`);
+async function fetchData(relPath) {
+  const fullPath = path.join(KPL_DATA_DIR, relPath);
+  console.log(`[sync] Reading: ${fullPath}`);
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
-    if (!res.ok) { console.warn(`[sync] Fetch failed: ${path} - status ${res.status}`); return null; }
-    return await res.text();
+    return fs.readFileSync(fullPath, 'utf-8');
   } catch (e) {
-    console.error(`[sync] Fetch failed: ${path} - ${e.message}`);
+    console.error(`[sync] Read failed: ${fullPath} - ${e.message}`);
     return null;
   }
 }

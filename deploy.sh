@@ -53,7 +53,23 @@ if ! ssh -o ConnectTimeout=5 -o BatchMode=yes -p "$DEPLOY_PORT" "${DEPLOY_USER}@
 fi
 log "SSH 连接正常 ✅"
 
-# ── 1. 打包源码 ──
+# ── 1.5. 部署 kpl-data-daily（同步 Python 爬虫代码到远程）──
+KPL_SOURCE_DIR="${KPL_SOURCE_DIR:-../kpl-data-daily}"
+if [ -d "${KPL_SOURCE_DIR}" ]; then
+  log "同步 kpl-data-daily 到远程 /root/kpl-data-daily..."
+  ssh -p "$DEPLOY_PORT" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p /root/kpl-data-daily"
+  rsync -avz -e "ssh -p $DEPLOY_PORT" \
+    --exclude='data/*.json' \
+    --exclude='__pycache__' \
+    --exclude='.venv' \
+    --exclude='*.tar.gz' \
+    "${KPL_SOURCE_DIR}/" "${DEPLOY_USER}@${DEPLOY_HOST}:/root/kpl-data-daily/"
+  log "kpl-data-daily 同步完成 ✅"
+else
+  warn "kpl-data-daily 目录不存在 (${KPL_SOURCE_DIR})，跳过同步"
+fi
+
+# ── 2. 打包源码 ──
 log "打包源码（排除 node_modules / data / .git）..."
 
 cd "$SCRIPT_DIR"

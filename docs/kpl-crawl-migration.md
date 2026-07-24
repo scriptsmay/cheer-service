@@ -8,26 +8,29 @@ kpl-data-daily 当前通过 GitHub Actions `daily-fetch.yml` cron (`16 1 * * *` 
 
 cheer-service 已有 node-cron 定时基础设施（部署在腾讯云 Docker），且 `syncScheduleLive` 已在直接调用 KPL API，具备接管采集的条件。
 
+**注意**: cheer-service 原有 `syncData`/`syncSchedule`/`syncLive` 三个 cron job 依赖 `DATA_BASE_URL` (原默认值 `cal.kplwuyan.site`)，该域名不存在且从未有过静态站点部署，导致三个 job 长期静默失败。实际数据仅通过 GH Actions POST `/api/admin/sync/*` 推送。这三个 job 已在迁移前禁用以修复问题。
+
 ## 架构变化
 
 ```
 迁移前:
   GH Actions (UTC 01:16, 不稳定)
-    ├── python main.py          → git → cal.kplwuyan.site (静态站点)
+    ├── python main.py
     ├── python fetch-schedule.py
     └── HTTP POST              → cheer-service /api/admin/sync/*
   cheer-service cron
-    ├── 04:00 HTTP fetch        ← cal.kplwuyan.site → MongoDB
-    └── 06:00 HTTP fetch        ← cal.kplwuyan.site → MongoDB
+    ├── syncData 04:00         ❌ 静默失败 (cal.kplwuyan.site 不存在)
+    └── syncSchedule 06:00     ❌ 静默失败 (cal.kplwuyan.site 不存在)
 
 迁移后:
   cheer-service cron (node-cron, 可靠)
     ├── 03:00 python main.py         ← 容器内本地执行
     ├── 03:30 python fetch-schedule.py
+    ├── 03:30 git push               ← 自动备份到 GitHub（若配置 GITHUB_TOKEN）
     ├── 04:00 fs.readFileSync        ← 本地读文件 → MongoDB
     └── 06:00 fs.readFileSync        ← 本地读文件 → MongoDB
   GH Actions
-    └── 仅 workflow_dispatch 手动触发 → 备份/历史补齐
+    └── 仅 workflow_dispatch 手动触发 → 紧急备份
 ```
 
 ## 改动清单
@@ -41,8 +44,8 @@ cheer-service 已有 node-cron 定时基础设施（部署在腾讯云 Docker）
 ```dockerfile
 FROM node:22-alpine
 
-# 新增: Python 3 + pip
-RUN apk add --no-cache python3 py3-pip
+# 新增: Python 3 + pip + git
+RUN apk add --no-cache python3 py3-pip git
 
 WORKDIR /app
 
@@ -86,6 +89,11 @@ api:
     - OPENAI_API_KEY=${AI_API_KEY:-}
     - OPENAI_BASE_URL=${AI_BASE_URL:-https://api.deepseek.com/v1}
     - OPENAI_MODEL=${AI_MODEL:-deepseek-chat}
+    # 新增: Git 备份（可选，不配则静默跳过）
+    - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+    - GITHUB_REPO=${GITHUB_REPO:-}
+    - GIT_USER_NAME=${GIT_USER_NAME:-KPL Data Bot}
+    - GIT_USER_EMAIL=${GIT_USER_EMAIL:-bot@kplwuyan.site}
 ```
 
 kpl-data-daily 输出到自身的 `data/` 目录，通过 volume mount 持久化在宿主机，容器重启不丢失。
@@ -94,78 +102,41 @@ kpl-data-daily 输出到自身的 `data/` 目录，通过 volume mount 持久化
 
 **新文件**: `server/src/jobs/syncKplCrawl.js`
 
-核心逻辑：通过 `child_process.spawn` 执行 Python 脚本，采集完成后返回结果。
+核心逻辑：通过 `child_process.spawn` 执行 Python 脚本，采集完成后自动 git push 备份到 GitHub（若配置了 `GITHUB_TOKEN` + `GITHUB_REPO` 环境变量）。
 
 ```javascript
-'use strict';
+const { spawn, exec } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
 
-const { spawn } = require('child_process');
-const path = require('path');
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
+const GITHUB_REPO = process.env.GITHUB_REPO || '';
 
-const KPL_DIR = process.env.KPL_DATA_DIR || '/app/kpl-data-daily';
-
-/**
- * 执行 Python 脚本并返回结果
- */
-function runPython(script, args = []) {
-  return new Promise((resolve, reject) => {
-    const cwd = KPL_DIR;
-    const cmd = 'python3';
-    const fullArgs = [script, ...args];
-    
-    console.log(`[kpl-crawl] Running: ${cmd} ${fullArgs.join(' ')} (cwd: ${cwd})`);
-    const t0 = Date.now();
-
-    const proc = spawn(cmd, fullArgs, { cwd, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
-    
-    let stdout = '', stderr = '';
-
-    proc.stdout.on('data', (d) => { stdout += d.toString(); });
-    proc.stderr.on('data', (d) => { stderr += d.toString(); });
-
-    proc.on('close', (code) => {
-      const elapsed = Date.now() - t0;
-      if (code === 0) {
-        console.log(`[kpl-crawl] ${script} OK (${elapsed}ms)`);
-        resolve({ ok: true, stdout: stdout.slice(-500), elapsed });
-      } else {
-        console.error(`[kpl-crawl] ${script} FAILED (code=${code}, ${elapsed}ms)`);
-        reject(new Error(`python ${script} exited with code ${code}: ${stderr.slice(-500)}`));
-      }
-    });
-
-    proc.on('error', (err) => {
-      console.error(`[kpl-crawl] ${script} spawn error:`, err.message);
-      reject(err);
-    });
-  });
+// Git push 使用一次性 token URL，不改 permanent remote config
+async function gitPush() {
+  if (!GITHUB_TOKEN || !GITHUB_REPO) {
+    return { ok: true, skipped: true, reason: 'missing env vars' };
+  }
+  const pushUrl = `https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git`;
+  await execAsync('git add -A', { cwd: KPL_DIR });
+  // 有变更才 commit + push
+  const { stdout } = await execAsync('git diff --cached --name-only', { cwd: KPL_DIR });
+  if (!stdout.trim()) return { ok: true, skipped: true, reason: 'no changes' };
+  await execAsync(`git commit -m "auto: daily crawl"`, { cwd: KPL_DIR });
+  await execAsync(`git push "${pushUrl}" HEAD`, { cwd: KPL_DIR });
+  return { ok: true };
 }
 
-/**
- * 主采集任务 — 替代 GH Actions daily-fetch
- * 1. python main.py          (数据采集 + 后处理)
- * 2. python fetch-schedule.py (赛程采集)
- */
 async function syncKplCrawl() {
-  const results = { main: null, schedule: null };
-
-  try {
-    results.main = await runPython('main.py');
-  } catch (e) {
-    console.error('[kpl-crawl] main.py error:', e.message);
-  }
-
-  try {
-    results.schedule = await runPython('scripts/fetch-schedule.py');
-  } catch (e) {
-    console.error('[kpl-crawl] fetch-schedule.py error:', e.message);
-  }
-
+  const results = { main: null, schedule: null, git: null };
+  try { results.main = await runPython('main.py'); } catch (e) { ... }
+  try { results.schedule = await runPython('scripts/fetch-schedule.py'); } catch (e) { ... }
+  results.git = await gitPush();  // 采集完成后自动备份
   return results;
 }
-
-module.exports = { syncKplCrawl, runPython };
 ```
+
+**Git 备份机制**：不配 `GITHUB_TOKEN` 则静默跳过，不影响数据采集入库。推荐配合一个 Fine-grained Personal Access Token，仅授权 kpl-data-daily 仓库的 Contents 读写。
 
 ### 4. 改造 syncData.js — HTTP fetch → 本地文件读取
 
@@ -224,7 +195,7 @@ cron.schedule('0 3 * * *', async () => {
 
 时间线设计：
 ```
-03:00  syncKplCrawl    ← python main.py + fetch-schedule.py
+03:00  syncKplCrawl    ← python main.py + fetch-schedule.py + git push
 04:00  syncData        ← 读本地文件入库 (原 HTTP 拉取)
 05:00  syncLive        ← 不变
 06:00  syncSchedule    ← 读本地文件入库 (原 HTTP 拉取)
@@ -297,19 +268,19 @@ rsync -avz -e "ssh -p $DEPLOY_PORT" \
 
 `KPL_SOURCE_DIR` 从 `.env.deploy` 读取，默认 `../kpl-data-daily`。
 
-### 9. GitHub Actions — 停用定时
+### 9. GitHub Actions — 停用 ⚠️ 需手动操作
 
-**文件**: `.github/workflows/daily-fetch.yml`
+**仓库**: kpl-data-daily (GitHub 远程仓库，不在本地)
 
-将 `schedule` 部分注释掉，保留 `workflow_dispatch`：
+采集 + git push 已完全由 cheer-service 容器接管。`daily-fetch.yml` 中的 `schedule` 和 `workflow_dispatch` 均可注释或删除（容器内 git push 已覆盖备份功能）：
 
 ```yaml
-on:
-  # 定时采集已迁移至 cheer-service Docker 容器，此处仅保留手动触发做备份
-  # schedule:
-  #   - cron: '16 1 * * *'
-  workflow_dispatch:
-    # ... 不变
+# 定时采集已迁移至 cheer-service Docker 容器（含 git push 备份）
+# 本 workflow 完全停用，如需��滚请取消下面注释
+# on:
+#   schedule:
+#     - cron: '16 1 * * *'
+#   workflow_dispatch:
 ```
 
 ### 10. 环境变量汇总
@@ -322,6 +293,8 @@ on:
 | `OPENAI_API_KEY` | Python AI 分析用（透传 cheer-service 的 `AI_API_KEY`） | `-` |
 | `OPENAI_BASE_URL` | Python AI 分析用（透传 cheer-service 的 `AI_BASE_URL`） | `-` |
 | `OPENAI_MODEL` | Python AI 分析用（透传 cheer-service 的 `AI_MODEL`） | `-` |
+| `GITHUB_TOKEN` | GitHub PAT（采集后自动 push 备份，可选） | `-` |
+| `GITHUB_REPO` | 仓库名如 `wetsk/kpl-data-daily`（可选） | `-` |
 
 docker-compose 中已将 cheer-service 的 AI 变量映射透传给 Python 脚本（见第 2 步）。
 
@@ -377,4 +350,4 @@ curl -X POST https://your-api-domain/api/admin/sync/crawl \
 | `.env.example` | 修改 | 新增环境变量说明 |
 | `deploy.sh` | 修改 | 新增 kpl-data-daily 部署步骤 |
 | `.env.deploy.example` | 修改 | 新增 KPL_SOURCE_DIR 配置 |
-| `.github/workflows/daily-fetch.yml` | 修改 | 注释 cron，保留手动触发 |
+| `.github/workflows/daily-fetch.yml` | 修改 ⚠️ | GitHub 远程修改：注释 cron，保留手动触发 |

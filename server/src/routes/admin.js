@@ -18,6 +18,10 @@ const { collection } = require('../db/mongo');
 const config = require('../config/env');
 const crypto = require('crypto');
 
+// kpl-data-daily 手动采集（容器内 Python 爬虫）
+let syncKplCrawl;
+try { syncKplCrawl = require('../jobs/syncKplCrawl').syncKplCrawl; } catch (_) {}
+
 // ── 鉴权守卫：硬拦截 ──
 function requireAuth(req, res, next) {
   if (req.identity && req.identity.ok) return next();
@@ -194,6 +198,25 @@ router.post('/sync/schedule', requireSyncKey, async (req, res) => {
       });
     } catch (_) {}
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /api/admin/sync/crawl — 手动触发 KPL 数据采集 [需登录]
+router.post('/sync/crawl', requireAuth, async (req, res) => {
+  if (!syncKplCrawl) {
+    return res.status(500).json({ ok: false, error: 'syncKplCrawl module not loaded' });
+  }
+
+  console.log('[admin] Manual crawl triggered');
+
+  // 异步执行，立即返回确认
+  res.json({ ok: true, message: '数据采集已触发，请查看容器日志' });
+
+  try {
+    const result = await syncKplCrawl();
+    console.log('[admin] Manual crawl completed:', JSON.stringify(result));
+  } catch (e) {
+    console.error('[admin] Manual crawl failed:', e.message);
   }
 });
 
@@ -402,6 +425,16 @@ const MANAGE_PAGE_HTML = `<!DOCTYPE html>
 
     <!-- 测试结果 -->
     <div id="testResult"></div>
+
+    <!-- 数据采集 -->
+    <div class="card">
+      <h2>📡 KPL 数据采集</h2>
+      <p style="font-size:13px;color:#666;margin-bottom:12px">手动触发 Python 爬虫采集 KPL 数据（main.py + fetch-schedule.py），异步执行，结果见容器日志。</p>
+      <div class="btn-row">
+        <button class="btn btn-outline" id="crawlBtn" onclick="triggerCrawl()">🔄 手动采集</button>
+      </div>
+      <div id="crawlResult"></div>
+    </div>
   </div>
 
 </div>
@@ -537,7 +570,29 @@ async function testAI() {
   }
 }
 
-// ── 初始化：检查已有 token ──
+// ── 手动采集 ──
+async function triggerCrawl() {
+  const el = document.getElementById('crawlResult');
+  const btn = document.getElementById('crawlBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>采集中...';
+  el.innerHTML = '<div class="result info">⏳ 采集任务已提交，异步执行中，请查看容器日志...</div>';
+
+  try {
+    const r = await api('POST', '/api/admin/sync/crawl');
+    if (!r) { btn.disabled = false; btn.innerHTML = '🔄 手动采集'; return; }
+    const d = await r.json();
+    if (d.ok) {
+      el.innerHTML = '<div class="result success">✅ ' + d.message + '</div>';
+    } else {
+      el.innerHTML = '<div class="result error">❌ ' + (d.error || '触发失败') + '</div>';
+    }
+  } catch(e) {
+    el.innerHTML = '<div class="result error">❌ 网络错误: ' + e.message + '</div>';
+  }
+  btn.disabled = false;
+  btn.innerHTML = '🔄 手动采集';
+}
 (async function init() {
   const t = getToken();
   if (!t) { showLogin(); return; }

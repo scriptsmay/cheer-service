@@ -1,13 +1,16 @@
 'use strict';
 
 /**
- * syncSchedule job — ← sync-schedule
- * 每日 06:00，从数据源全量同步赛程
+ * syncSchedule job
+ * 每日 06:00，从本地 kpl-data-daily 数据目录全量同步赛程
  */
 
+const fs = require('fs');
+const path = require('path');
 const { collection } = require('../db/mongo');
 const { mergeScheduleMatches, recordSyncSnapshot } = require('../lib/schedule-merge');
-const config = require('../config/env');
+
+const KPL_DATA_DIR = process.env.KPL_DATA_DIR || '/app/kpl-data-daily';
 
 async function syncSchedule() {
   const result = { season: null, status: 'pending', matches: 0, error: null };
@@ -76,15 +79,13 @@ async function syncSchedule() {
   return result;
 }
 
-async function fetchData(path) {
-  const url = `${config.dataBaseUrl}/${path}`;
-  console.log(`[sync-schedule] Fetching: ${path}`);
+async function fetchData(relPath) {
+  const fullPath = path.join(KPL_DATA_DIR, relPath);
+  console.log(`[sync-schedule] Reading: ${fullPath}`);
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
-    if (!res.ok) return null;
-    return await res.text();
+    return fs.readFileSync(fullPath, 'utf-8');
   } catch (e) {
-    console.error(`[sync-schedule] Fetch failed: ${path} - ${e.message}`);
+    console.error(`[sync-schedule] Read failed: ${fullPath} - ${e.message}`);
     return null;
   }
 }

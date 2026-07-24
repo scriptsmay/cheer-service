@@ -47,6 +47,9 @@ const config = {
   // 迁移后将改为容器内本地文件读取，见 docs/kpl-crawl-migration.md
   dataBaseUrl: process.env.DATA_BASE_URL || '',
 
+  // kpl-data-daily 本地数据目录（容器内挂载路径）
+  kplDataDir: process.env.KPL_DATA_DIR || '/app/kpl-data-daily',
+
   // 数据同步 API Key（push 模式，kpl-data-daily GitHub Actions 推送用）
   syncApiKey: process.env.SYNC_API_KEY || '',
 

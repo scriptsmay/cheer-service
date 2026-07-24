@@ -58,6 +58,7 @@ services:
     ports:
       - "19091:3000"
     volumes:
+      - /root/kpl-data-daily:/app/kpl-data-daily
       - api-data:/app/data
     env_file:
       - ./.env
@@ -65,6 +66,16 @@ services:
       - MONGO_URI=mongodb://wuyan:${MONGO_PASSWORD:-changeme_strong_password}@mongodb:27017/wuyan?authSource=admin&replicaSet=rs0
       - TZ=Asia/Shanghai
       - SYNC_API_KEY=${SYNC_API_KEY:-}
+      # kpl-data-daily 本地路径 & Python AI 透传
+      - KPL_DATA_DIR=/app/kpl-data-daily
+      - OPENAI_API_KEY=${AI_API_KEY:-}
+      - OPENAI_BASE_URL=${AI_BASE_URL:-https://api.deepseek.com/v1}
+      - OPENAI_MODEL=${AI_MODEL:-deepseek-chat}
+      # kpl-data-daily Git 备份（可选，不配则跳过 push）
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GITHUB_REPO=${GITHUB_REPO:-}
+      - GIT_USER_NAME=${GIT_USER_NAME:-KPL Data Bot}
+      - GIT_USER_EMAIL=${GIT_USER_EMAIL:-bot@kplwuyan.site}
     depends_on:
       mongodb:
         condition: service_healthy
