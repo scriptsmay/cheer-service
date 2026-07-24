@@ -54,16 +54,21 @@ fi
 log "SSH 连接正常 ✅"
 
 # ── 1.5. 部署 kpl-data-daily（同步 Python 爬虫代码到远程）──
-KPL_SOURCE_DIR="${KPL_SOURCE_DIR:-../kpl-data-daily}"
-if [ -d "${KPL_SOURCE_DIR}" ]; then
+if [ -n "${KPL_SOURCE_DIR:-}" ] && [ -d "${KPL_SOURCE_DIR}" ]; then
   log "同步 kpl-data-daily 到远程 /root/kpl-data-daily..."
-  ssh -p "$DEPLOY_PORT" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p /root/kpl-data-daily"
-  rsync -avz -e "ssh -p $DEPLOY_PORT" \
+  KPL_TAR="/tmp/kpl-data-daily-${TIMESTAMP}.tar.gz"
+  tar -czf "$KPL_TAR" \
     --exclude='data/*.json' \
     --exclude='__pycache__' \
     --exclude='.venv' \
     --exclude='*.tar.gz' \
-    "${KPL_SOURCE_DIR}/" "${DEPLOY_USER}@${DEPLOY_HOST}:/root/kpl-data-daily/"
+    -C "${KPL_SOURCE_DIR}/.." \
+    "$(basename "${KPL_SOURCE_DIR}")"
+  ssh -p "$DEPLOY_PORT" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p /root/kpl-data-daily"
+  scp -P "$DEPLOY_PORT" "$KPL_TAR" "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/"
+  ssh -p "$DEPLOY_PORT" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+    "rm -rf /root/kpl-data-daily && tar -xzf /tmp/$(basename "$KPL_TAR") -C /root/ && rm /tmp/$(basename "$KPL_TAR")"
+  rm "$KPL_TAR"
   log "kpl-data-daily 同步完成 ✅"
 else
   warn "kpl-data-daily 目录不存在 (${KPL_SOURCE_DIR})，跳过同步"
