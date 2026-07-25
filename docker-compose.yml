@@ -31,7 +31,9 @@ services:
             quit(1)
           }
         " --username wuyan --password ${MONGO_PASSWORD:-changeme_strong_password} --authenticationDatabase admin
-      interval: 5s
+      # interval 不宜太短: 每次 mongosh 连接会让 mongo 记 5-7 行 INFO 日志(Connection accepted/metadata/auth/ended),
+      # 5s 间隔会把 docker compose logs -f 刷爆。30s 足够检测单节点副本集故障, start_period+retries 已覆盖启动期
+      interval: 30s
       timeout: 10s
       retries: 20
       start_period: 10s

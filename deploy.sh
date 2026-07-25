@@ -54,8 +54,13 @@ fi
 log "SSH 连接正常"
 
 # -- 1.5. 部署 kpl-data-daily（同步 Python 爬虫代码到远程）--
+# 注意命名差异: 本地目录 kpl_data_daily(下划线) → 远程挂载 /root/kpl-data-daily(连字符)
+# 远程路径必须与 docker-compose.yml 的 bind mount 一致。
+# "重命名"靠解压时 --strip-components=1 实现: tar 里的 kpl_data_daily/ 前缀被剥掉,
+# 内容直接落到 KPL_REMOTE_DIR, 因此本地目录名与远程无关, 改任一方都不影响。
+KPL_REMOTE_DIR="/root/kpl-data-daily"
 if [ -n "${KPL_SOURCE_DIR:-}" ] && [ -d "${KPL_SOURCE_DIR}" ]; then
-  log "同步 kpl-data-daily 到远程 /root/kpl-data-daily..."
+  log "同步 kpl-data-daily (${KPL_SOURCE_DIR}) → 远程 ${KPL_REMOTE_DIR}..."
   KPL_TAR="/tmp/kpl-data-daily-${TIMESTAMP}.tar.gz"
   tar -czf "$KPL_TAR" \
     --exclude='data/*.json' \
@@ -64,14 +69,17 @@ if [ -n "${KPL_SOURCE_DIR:-}" ] && [ -d "${KPL_SOURCE_DIR}" ]; then
     --exclude='*.tar.gz' \
     -C "${KPL_SOURCE_DIR}/.." \
     "$(basename "${KPL_SOURCE_DIR}")"
-  ssh -p "$DEPLOY_PORT" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p /root/kpl-data-daily"
+  ssh -p "$DEPLOY_PORT" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p ${KPL_REMOTE_DIR}"
   scp -P "$DEPLOY_PORT" "$KPL_TAR" "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/"
+  # --strip-components=1 去掉本地目录名前缀, 实现 kpl_data_daily → kpl-data-daily 的映射
+  # chown 修复跨机 tar 解压的 git dubious ownership(Windows owner → root)
   ssh -p "$DEPLOY_PORT" "${DEPLOY_USER}@${DEPLOY_HOST}" \
-    "rm -rf /root/kpl-data-daily && tar -xzf /tmp/$(basename "$KPL_TAR") -C /root/ && rm /tmp/$(basename "$KPL_TAR")"
+    "tar -xzf /tmp/$(basename "$KPL_TAR") -C ${KPL_REMOTE_DIR} --strip-components=1 && chown -R root:root ${KPL_REMOTE_DIR} && rm /tmp/$(basename "$KPL_TAR")"
   rm "$KPL_TAR"
   log "kpl-data-daily 同步完成"
 else
   warn "kpl-data-daily 目录不存在 (${KPL_SOURCE_DIR:-未配置})，跳过同步"
+  warn "注意: 跳过后容器仍挂载 ${KPL_REMOTE_DIR}, 若该目录为空会导致采集报 No such file"
 fi
 
 # -- 2. 打包源码 --
