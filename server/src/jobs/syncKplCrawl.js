@@ -13,6 +13,11 @@ const GITHUB_REPO = process.env.GITHUB_REPO || ''; // e.g. "wetsk/kpl-data-daily
 const GIT_USER = process.env.GIT_USER_NAME || 'KPL Data Bot';
 const GIT_EMAIL = process.env.GIT_USER_EMAIL || 'bot@kplwuyan.site';
 
+// git push 认证方式: SSH(默认) 或 HTTPS+token
+// SSH 模式靠容器内 SSH key + GIT_SSH_COMMAND 认证, 不依赖 GITHUB_TOKEN
+// HTTPS 模式回退用 token(仅作 fallback, 不推荐: token 会进命令行/日志)
+const USE_SSH = (process.env.GITHUB_PUSH_SSH ?? 'true') !== 'false';
+
 /**
  * 解析 Python 可执行文件
  * 优先级: KPL_PYTHON 环境变量 > 平台默认 (Linux: python3 / Windows: python)
@@ -44,6 +49,45 @@ function runGit(args, { cwd } = {}) {
     });
     proc.on('error', reject);
   });
+}
+
+/**
+ * 脱敏: 把 https://x-access-token:xxx@github.com 替换为 https://***@github.com
+ * 防止 HTTPS fallback 模式下 token 泄露进日志/错误消息/admin 响应
+ */
+function maskUrl(text) {
+  return text.replace(/(https?:\/\/)[^@]+@/g, '$1***@');
+}
+
+/**
+ * git push 带重试 — 国内出口到 GitHub 抖动是常态(RST/超时), 重试可显著提升成功率
+ * git push 是幂等的(ref 已 up-to-date 时第二次返回成功), 重试安全
+ * @param {string} pushUrl
+ * @param {string} branch
+ * @param {string} cwd
+ * @param {number} maxRetries
+ * @returns {Promise<string>} push stdout
+ */
+async function pushWithRetry(pushUrl, branch, cwd, maxRetries = 3) {
+  let lastErr;
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const out = await runGit(['push', pushUrl, branch], { cwd });
+      console.log(`[kpl-crawl] Git push OK (attempt ${i + 1}/${maxRetries})`);
+      return out;
+    } catch (err) {
+      lastErr = err;
+      const masked = maskUrl(err.message);
+      if (i < maxRetries - 1) {
+        const delay = 2000 * (i + 1); // 2s, 4s 递增
+        console.warn(`[kpl-crawl] Git push attempt ${i + 1}/${maxRetries} failed: ${masked}; retry in ${delay}ms`);
+        await new Promise((r) => setTimeout(r, delay));
+      } else {
+        console.error(`[kpl-crawl] Git push failed after ${maxRetries} attempts: ${masked}`);
+      }
+    }
+  }
+  throw lastErr;
 }
 
 /**
@@ -92,17 +136,24 @@ function runPython(script, args = []) {
 
 /**
  * git push — 采集完成后自动备份到 GitHub
- * 使用 GITHUB_TOKEN 认证，不会修改 permanent remote config
+ * 默认走 SSH(靠容器 SSH key 认证), 可用 GITHUB_PUSH_SSH=false 回退 HTTPS+token
  * @returns {Promise<{ok: boolean, skipped?: boolean, reason?: string, hash?: string}>}
  */
 async function gitPush() {
-  if (!GITHUB_TOKEN || !GITHUB_REPO) {
-    console.log('[kpl-crawl] Git push skipped: GITHUB_TOKEN or GITHUB_REPO not set');
-    return { ok: true, skipped: true, reason: 'missing env vars' };
+  if (!GITHUB_REPO) {
+    console.log('[kpl-crawl] Git push skipped: GITHUB_REPO not set');
+    return { ok: true, skipped: true, reason: 'missing GITHUB_REPO' };
+  }
+  if (!USE_SSH && !GITHUB_TOKEN) {
+    console.log('[kpl-crawl] Git push skipped: HTTPS mode requires GITHUB_TOKEN');
+    return { ok: true, skipped: true, reason: 'missing GITHUB_TOKEN' };
   }
 
   const cwd = KPL_DIR;
-  const pushUrl = `https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git`;
+  const pushUrl = USE_SSH
+    ? `git@github.com:${GITHUB_REPO}.git`
+    : `https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git`;
+  const method = USE_SSH ? 'SSH' : 'HTTPS';
   const dateStr = new Date().toISOString().split('T')[0];
 
   try {
@@ -122,18 +173,18 @@ async function gitPush() {
 
     // 4. commit
     const changedFiles = diffOut.trim().split('\n').filter(Boolean).length;
-    console.log(`[kpl-crawl] Git commit: ${changedFiles} file(s) changed`);
+    console.log(`[kpl-crawl] Git commit (${method}): ${changedFiles} file(s) changed`);
     await runGit(['commit', '-m', `auto: daily crawl ${dateStr}`], { cwd });
 
-    // 5. push（使用一次性 token URL，不改 permanent remote）
+    // 5. push（SSH 直连 origin；HTTPS 用一次性 token URL，不改 permanent remote）
     const branch = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
-    const pushOut = await runGit(['push', pushUrl, branch], { cwd });
+    const pushOut = await pushWithRetry(pushUrl, branch, cwd);
 
-    console.log(`[kpl-crawl] Git push OK: ${pushOut.split('\n').pop()}`);
     return { ok: true, hash: pushOut };
   } catch (err) {
-    console.error('[kpl-crawl] Git push FAILED:', err.message);
-    return { ok: false, error: err.message };
+    const masked = maskUrl(err.message);
+    console.error('[kpl-crawl] Git push FAILED:', masked);
+    return { ok: false, error: masked };
   }
 }
 

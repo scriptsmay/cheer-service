@@ -121,6 +121,7 @@ async function collection(name) {
  * MongoDB 需要副本集才能用事务
  */
 async function runTransaction(fn) {
+  await getDb();
   const session = client.startSession();
   try {
     return await session.withTransaction(async () => {

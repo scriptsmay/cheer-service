@@ -62,6 +62,9 @@ services:
     volumes:
       - /root/kpl-data-daily:/app/kpl-data-daily
       - api-data:/app/data
+      # kpl-data-daily SSH push: 挂载宿主机 deploy 私钥(只读), GIT_SSH_COMMAND 指定用它
+      # 宿主机需先生成 key 并把公钥加到 GitHub 仓库的 Deploy keys
+      - /root/.ssh/kpl_deploy_key:/root/.ssh/id_ed25519:ro
     env_file:
       - ./.env
     environment:
@@ -73,11 +76,15 @@ services:
       - OPENAI_API_KEY=${AI_API_KEY:-}
       - OPENAI_BASE_URL=${AI_BASE_URL:-https://api.deepseek.com/v1}
       - OPENAI_MODEL=${AI_MODEL:-deepseek-chat}
-      # kpl-data-daily Git 备份（可选，不配则跳过 push）
-      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      # kpl-data-daily Git 备份(SSH 模式不需要 GITHUB_TOKEN, 只需 GITHUB_REPO 构造 URL)
+      # GITHUB_TOKEN 仅在 GITHUB_PUSH_SSH=false 回退 HTTPS 时需要; SSH 模式忽略它
       - GITHUB_REPO=${GITHUB_REPO:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GITHUB_PUSH_SSH=${GITHUB_PUSH_SSH:-true}
       - GIT_USER_NAME=${GIT_USER_NAME:-KPL Data Bot}
       - GIT_USER_EMAIL=${GIT_USER_EMAIL:-bot@kplwuyan.site}
+      # SSH push 认证: 用挂载的私钥, StrictHostKeyChecking=accept-new 兜底(Dockerfile 已预置 known_hosts)
+      - GIT_SSH_COMMAND=ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new
     depends_on:
       mongodb:
         condition: service_healthy
