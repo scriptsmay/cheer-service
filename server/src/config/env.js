@@ -50,6 +50,12 @@ const config = {
   // kpl-data-daily 本地数据目录（容器内挂载路径）
   kplDataDir: process.env.KPL_DATA_DIR || '/app/kpl-data-daily',
 
+  // 第三方采集开关（CRAWL_ENABLED=false 时暂停所有调用第三方 API 的采集任务）
+  // 用于第三方接口不可用时暂停采集，避免无效请求和错误日志
+  // 受影响: syncKplCrawl(Python 采集)、syncScheduleLive(实时赛程)
+  // 不受影响: syncData/syncSchedule(读本地文件，不调第三方)
+  crawlEnabled: process.env.CRAWL_ENABLED !== 'false',
+
   // 数据同步 API Key（push 模式，kpl-data-daily GitHub Actions 推送用）
   syncApiKey: process.env.SYNC_API_KEY || '',
 

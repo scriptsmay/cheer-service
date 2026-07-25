@@ -219,17 +219,19 @@ router.get('/sync/status', requireAuth, async (req, res) => {
 
     let playerOverview = null;
     if (summary) {
-      const data = summary.data || {};
-      const playerInfo = data.player_info || data;
-      const currentSeason = data.current_season || {};
-      const careerSummary = data.career_summary || {};
+      const overview = summary.data || {};
+      const innerData = overview.data || overview;
+      const playerInfo = innerData.player_info || {};
+      const careerSummary = innerData.career_summary || {};
+      const seasonStats = Array.isArray(innerData.season_stats) ? innerData.season_stats : [];
+      const currentSeason = seasonStats.find((s) => s.season_id === summary.season) || innerData.current_season || {};
       playerOverview = {
         season: summary.season,
         season_name: summary.season_name,
         player_name: summary.player_name,
         team_name: summary.team_name,
         latest_match_time: playerInfo.latest_match_time || null,
-        total_games: playerInfo.total_games ?? currentSeason.battles ?? careerSummary.total_matches ?? null,
+        total_games: playerInfo.total_games ?? careerSummary.total_matches ?? null,
         current_season: {
           battles: currentSeason.battles ?? 0,
           wins: currentSeason.wins ?? 0,
@@ -269,6 +271,10 @@ router.get('/sync/status', requireAuth, async (req, res) => {
 router.post('/sync/crawl', requireAuth, async (req, res) => {
   if (!syncKplCrawl) {
     return res.status(500).json({ ok: false, error: 'syncKplCrawl module not loaded' });
+  }
+
+  if (!config.crawlEnabled) {
+    return res.status(403).json({ ok: false, error: '采集已暂停（CRAWL_ENABLED=false），第三方接口不可用' });
   }
 
   console.log('[admin] Manual crawl triggered');

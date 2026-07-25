@@ -5,6 +5,7 @@
  */
 
 const cron = require('node-cron');
+const config = require('../config/env');
 const { syncKplCrawl } = require('./syncKplCrawl');
 const { syncData } = require('./syncData');
 const { syncSchedule } = require('./syncSchedule');
@@ -16,6 +17,10 @@ const { cleanupAiReports } = require('./cleanupAiReports');
 function startScheduler() {
   // 03:00 Python 采集 (main.py + fetch-schedule.py)
   cron.schedule('0 3 * * *', async () => {
+    if (!config.crawlEnabled) {
+      console.log('[scheduler] syncKplCrawl skipped (CRAWL_ENABLED=false)');
+      return;
+    }
     console.log('[scheduler] Running syncKplCrawl at 03:00');
     try { await syncKplCrawl(); } catch (e) { console.error('[scheduler] syncKplCrawl error:', e.message); }
   });
@@ -33,6 +38,9 @@ function startScheduler() {
   });
 
   cron.schedule('*/10 * * * *', async () => {
+    if (!config.crawlEnabled) {
+      return; // 静默跳过，避免每 10 分钟刷日志
+    }
     console.log('[scheduler] Running syncScheduleLive every 10 min');
     try { await syncScheduleLive(); } catch (e) { console.error('[scheduler] syncScheduleLive error:', e.message); }
   });
