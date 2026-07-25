@@ -18,9 +18,11 @@ const { collection } = require('../db/mongo');
 const config = require('../config/env');
 const crypto = require('crypto');
 
-// kpl-data-daily 手动采集（容器内 Python 爬虫）
-let syncKplCrawl;
+// kpl-data-daily 手动采集（容器内 Python 爬虫）+ 入库
+let syncKplCrawl, syncData, syncSchedule;
 try { syncKplCrawl = require('../jobs/syncKplCrawl').syncKplCrawl; } catch (_) {}
+try { syncData = require('../jobs/syncData').syncData; } catch (_) {}
+try { syncSchedule = require('../jobs/syncSchedule').syncSchedule; } catch (_) {}
 
 // ── 鉴权守卫：硬拦截 ──
 function requireAuth(req, res, next) {
@@ -283,8 +285,29 @@ router.post('/sync/crawl', requireAuth, async (req, res) => {
   res.json({ ok: true, message: '数据采集已触发，请查看容器日志' });
 
   try {
-    const result = await syncKplCrawl();
-    console.log('[admin] Manual crawl completed:', JSON.stringify(result));
+    const crawlResult = await syncKplCrawl();
+    console.log('[admin] Manual crawl completed:', JSON.stringify(crawlResult));
+
+    // 采集完成后自动入库，让 sync/status 实时反映
+    if (syncData) {
+      console.log('[admin] Triggering syncData...');
+      try {
+        const dataResult = await syncData();
+        console.log('[admin] syncData completed:', JSON.stringify(dataResult));
+      } catch (e) {
+        console.error('[admin] syncData failed:', e.message);
+      }
+    }
+    if (syncSchedule) {
+      console.log('[admin] Triggering syncSchedule...');
+      try {
+        const scheduleResult = await syncSchedule();
+        console.log('[admin] syncSchedule completed:', JSON.stringify(scheduleResult));
+      } catch (e) {
+        console.error('[admin] syncSchedule failed:', e.message);
+      }
+    }
+    console.log('[admin] Manual crawl + sync all done');
   } catch (e) {
     console.error('[admin] Manual crawl failed:', e.message);
   }
