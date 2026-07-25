@@ -201,6 +201,70 @@ router.post('/sync/schedule', requireSyncKey, async (req, res) => {
   }
 });
 
+// GET /api/admin/sync/status — 查询采集状态和单人数据概览 [需登录]
+router.get('/sync/status', requireAuth, async (req, res) => {
+  try {
+    const syncCol = await collection('sync_snapshots');
+    const summaryCol = await collection('season_summaries');
+
+    const [dailySnap, scheduleSnap, summaryDocs] = await Promise.all([
+      syncCol.where({ type: 'daily' }).orderBy('updated_at', 'desc').limit(1).get(),
+      syncCol.where({ type: 'schedule' }).orderBy('updated_at', 'desc').limit(1).get(),
+      summaryCol.orderBy('updated_at', 'desc').limit(1).get(),
+    ]);
+
+    const daily = dailySnap.data[0] || null;
+    const schedule = scheduleSnap.data[0] || null;
+    const summary = summaryDocs.data[0] || null;
+
+    let playerOverview = null;
+    if (summary) {
+      const data = summary.data || {};
+      const playerInfo = data.player_info || data;
+      const currentSeason = data.current_season || {};
+      const careerSummary = data.career_summary || {};
+      playerOverview = {
+        season: summary.season,
+        season_name: summary.season_name,
+        player_name: summary.player_name,
+        team_name: summary.team_name,
+        latest_match_time: playerInfo.latest_match_time || null,
+        total_games: playerInfo.total_games ?? currentSeason.battles ?? careerSummary.total_matches ?? null,
+        current_season: {
+          battles: currentSeason.battles ?? 0,
+          wins: currentSeason.wins ?? 0,
+          loses: currentSeason.loses ?? 0,
+          win_rate: currentSeason.win_rate ?? null,
+          mvp: currentSeason.mvp ?? 0,
+          kda_ratio: currentSeason.kda_ratio ?? null,
+        },
+        updated_at: summary.updated_at,
+      };
+    }
+
+    res.json({
+      ok: true,
+      last_daily_sync: daily ? {
+        status: daily.status,
+        season: daily.season,
+        source: daily.source,
+        updated_at: daily.updated_at,
+        error: daily.error || null,
+      } : null,
+      last_schedule_sync: schedule ? {
+        status: schedule.status,
+        season: schedule.season,
+        updated_at: schedule.updated_at,
+        error: schedule.error || null,
+      } : null,
+      player_overview: playerOverview,
+    });
+  } catch (err) {
+    console.error('[admin] sync status error:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // POST /api/admin/sync/crawl — 手动触发 KPL 数据采集 [需登录]
 router.post('/sync/crawl', requireAuth, async (req, res) => {
   if (!syncKplCrawl) {
@@ -430,8 +494,12 @@ const MANAGE_PAGE_HTML = `<!DOCTYPE html>
     <div class="card">
       <h2>📡 KPL 数据采集</h2>
       <p style="font-size:13px;color:#666;margin-bottom:12px">手动触发 Python 爬虫采集 KPL 数据（main.py + fetch-schedule.py），异步执行，结果见容器日志。</p>
+      <div id="syncStatus" style="margin-bottom:16px">
+        <div style="font-size:13px;color:#666;margin-bottom:8px">⏳ 加载中...</div>
+      </div>
       <div class="btn-row">
         <button class="btn btn-outline" id="crawlBtn" onclick="triggerCrawl()">🔄 手动采集</button>
+        <button class="btn btn-outline" id="refreshBtn" onclick="refreshSyncStatus()">↻ 刷新状态</button>
       </div>
       <div id="crawlResult"></div>
     </div>
@@ -462,6 +530,7 @@ function showAdmin() {
   document.getElementById('loginPanel').classList.remove('show');
   document.getElementById('adminPanel').classList.add('show');
   refresh();
+  refreshSyncStatus();
 }
 
 // ── 登录 ──
@@ -567,6 +636,90 @@ async function testAI() {
     el.innerHTML = '<div class="result success">✅ 连接成功 | 延迟: <b>' + d.latency_ms + 'ms</b> | 模型: <b>' + d.model + '</b> | 回复: <b>' + d.reply + '</b> | Tokens: ' + JSON.stringify(d.usage) + '</div>';
   } else {
     el.innerHTML = '<div class="result error">❌ 连接失败 | 延迟: <b>' + d.latency_ms + 'ms</b>' + (d.status ? ' | HTTP ' + d.status : '') + '<br>' + (d.error || '未知错误') + '</div>';
+  }
+}
+
+// ── 格式化时间 ──
+function formatTime(isoStr) {
+  if (!isoStr) return '-';
+  try {
+    const d = new Date(isoStr);
+    const pad = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+      + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  } catch { return isoStr; }
+}
+
+// ── 状态徽章样式 ──
+function statusBadge(status) {
+  const map = {
+    success:   { bg: '#dcfce7', fg: '#166534', label: '成功' },
+    no_change: { bg: '#e0e7ff', fg: '#3730a3', label: '无变化' },
+    skipped:   { bg: '#fef3c7', fg: '#92400e', label: '跳过' },
+    error:     { bg: '#fecaca', fg: '#991b1b', label: '失败' },
+  };
+  const s = map[status] || { bg: '#e5e7eb', fg: '#374151', label: status || '未知' };
+  return '<span class="badge" style="background:' + s.bg + ';color:' + s.fg + '">' + s.label + '</span>';
+}
+
+// ── 刷新采集状态 ──
+async function refreshSyncStatus() {
+  const el = document.getElementById('syncStatus');
+  el.innerHTML = '<div style="font-size:13px;color:#666">⏳ 加载中...</div>';
+  try {
+    const r = await api('GET', '/api/admin/sync/status');
+    if (!r) return;
+    const d = await r.json();
+    if (!d.ok) {
+      el.innerHTML = '<div class="result error" style="margin:0">❌ ' + (d.error || '加载失败') + '</div>';
+      return;
+    }
+
+    let html = '';
+
+    if (d.last_daily_sync) {
+      html += '<div style="font-size:13px;margin-bottom:8px"><b>📊 单人数据:</b> '
+        + statusBadge(d.last_daily_sync.status)
+        + ' <span style="color:#666">赛季: ' + (d.last_daily_sync.season || '-') + '</span><br>'
+        + '<span style="color:#888;font-size:12px">上次更新: ' + formatTime(d.last_daily_sync.updated_at) + '</span>'
+        + (d.last_daily_sync.error ? '<br><span style="color:#dc2626;font-size:12px">错误: ' + d.last_daily_sync.error + '</span>' : '')
+        + '</div>';
+    } else {
+      html += '<div style="font-size:13px;margin-bottom:8px"><b>📊 单人数据:</b> <span style="color:#888">暂无记录</span></div>';
+    }
+
+    if (d.last_schedule_sync) {
+      html += '<div style="font-size:13px;margin-bottom:8px"><b>📅 赛程数据:</b> '
+        + statusBadge(d.last_schedule_sync.status)
+        + ' <span style="color:#666">赛季: ' + (d.last_schedule_sync.season || '-') + '</span><br>'
+        + '<span style="color:#888;font-size:12px">上次更新: ' + formatTime(d.last_schedule_sync.updated_at) + '</span>'
+        + (d.last_schedule_sync.error ? '<br><span style="color:#dc2626;font-size:12px">错误: ' + d.last_schedule_sync.error + '</span>' : '')
+        + '</div>';
+    } else {
+      html += '<div style="font-size:13px;margin-bottom:8px"><b>📅 赛程数据:</b> <span style="color:#888">暂无记录</span></div>';
+    }
+
+    if (d.player_overview) {
+      const p = d.player_overview;
+      const cs = p.current_season || {};
+      html += '<div style="margin-top:12px;padding-top:12px;border-top:1px solid #eee">'
+        + '<div style="font-size:13px;font-weight:600;margin-bottom:6px">👤 ' + (p.player_name || '-')
+        + ' <span style="color:#888;font-weight:normal">' + (p.team_name || '') + '</span></div>'
+        + '<div style="font-size:12px;color:#666;line-height:1.8">'
+        + '赛季: ' + (p.season_name || p.season || '-') + '<br>'
+        + '最后比赛: ' + (p.latest_match_time || '-') + '<br>'
+        + '当前赛季: ' + (cs.battles || 0) + ' 场 / ' + (cs.wins || 0) + '胜' + (cs.loses || 0) + '负'
+        + (cs.win_rate ? ' (' + cs.win_rate + ')' : '')
+        + (cs.mvp ? ' / MVP: ' + cs.mvp : '')
+        + (cs.kda_ratio ? ' / KDA: ' + cs.kda_ratio : '')
+        + '<br>'
+        + '<span style="color:#888">数据入库时间: ' + formatTime(p.updated_at) + '</span>'
+        + '</div></div>';
+    }
+
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<div class="result error" style="margin:0">❌ 网络错误: ' + e.message + '</div>';
   }
 }
 

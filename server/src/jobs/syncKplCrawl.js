@@ -5,15 +5,46 @@
  * 替代 GitHub Actions daily-fetch.yml，在容器内本地执行 kpl-data-daily 爬虫
  */
 
-const { spawn, exec } = require('child_process');
-const { promisify } = require('util');
-const execAsync = promisify(exec);
+const { spawn } = require('child_process');
 
 const KPL_DIR = process.env.KPL_DATA_DIR || '/app/kpl-data-daily';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
 const GITHUB_REPO = process.env.GITHUB_REPO || ''; // e.g. "wetsk/kpl-data-daily"
 const GIT_USER = process.env.GIT_USER_NAME || 'KPL Data Bot';
 const GIT_EMAIL = process.env.GIT_USER_EMAIL || 'bot@kplwuyan.site';
+
+/**
+ * 解析 Python 可执行文件
+ * 优先级: KPL_PYTHON 环境变量 > 平台默认 (Linux: python3 / Windows: python)
+ * 不写死 python3，避免换基础镜像或 python 命名不同时硬失效
+ */
+function resolvePython() {
+  if (process.env.KPL_PYTHON) return process.env.KPL_PYTHON;
+  return process.platform === 'win32' ? 'python' : 'python3';
+}
+
+/**
+ * 直接 spawn git（不走 shell），避免依赖 cmd.exe / /bin/sh
+ * 同时消除把 token 拼进 shell 命令串的隐患
+ * @returns {Promise<string>} stdout (trimmed)
+ */
+function runGit(args, { cwd } = {}) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('git', args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    });
+    let stdout = '', stderr = '';
+    proc.stdout.on('data', (d) => { stdout += d.toString(); });
+    proc.stderr.on('data', (d) => { stderr += d.toString(); });
+    proc.on('close', (code) => {
+      if (code === 0) return resolve(stdout.trim());
+      reject(new Error(`git ${args.join(' ')} exited ${code}: ${stderr.trim().slice(-300)}`));
+    });
+    proc.on('error', reject);
+  });
+}
 
 /**
  * 执行 Python 脚本并返回结果
@@ -24,7 +55,7 @@ const GIT_EMAIL = process.env.GIT_USER_EMAIL || 'bot@kplwuyan.site';
 function runPython(script, args = []) {
   return new Promise((resolve, reject) => {
     const cwd = KPL_DIR;
-    const cmd = 'python3';
+    const cmd = resolvePython();
     const fullArgs = [script, ...args];
 
     console.log(`[kpl-crawl] Running: ${cmd} ${fullArgs.join(' ')} (cwd: ${cwd})`);
@@ -76,33 +107,30 @@ async function gitPush() {
 
   try {
     // 1. 确保 git 用户已配置
-    await execAsync(`git config user.name "${GIT_USER}"`, { cwd });
-    await execAsync(`git config user.email "${GIT_EMAIL}"`, { cwd });
+    await runGit(['config', 'user.name', GIT_USER], { cwd });
+    await runGit(['config', 'user.email', GIT_EMAIL], { cwd });
 
     // 2. stage 所有变更
-    await execAsync('git add -A', { cwd });
+    await runGit(['add', '-A'], { cwd });
 
     // 3. 检查是否有变更
-    const { stdout: diffOut } = await execAsync('git diff --cached --name-only', { cwd });
+    const diffOut = await runGit(['diff', '--cached', '--name-only'], { cwd });
     if (!diffOut.trim()) {
       console.log('[kpl-crawl] Git push skipped: no changes');
       return { ok: true, skipped: true, reason: 'no changes' };
     }
 
     // 4. commit
-    const changedFiles = diffOut.trim().split('\n').length;
+    const changedFiles = diffOut.trim().split('\n').filter(Boolean).length;
     console.log(`[kpl-crawl] Git commit: ${changedFiles} file(s) changed`);
-    await execAsync(`git commit -m "auto: daily crawl ${dateStr}"`, { cwd });
+    await runGit(['commit', '-m', `auto: daily crawl ${dateStr}`], { cwd });
 
     // 5. push（使用一次性 token URL，不改 permanent remote）
-    const branch = (await execAsync('git rev-parse --abbrev-ref HEAD', { cwd })).stdout.trim();
-    const { stdout: pushOut } = await execAsync(
-      `git push "${pushUrl}" ${branch}`,
-      { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }
-    );
+    const branch = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
+    const pushOut = await runGit(['push', pushUrl, branch], { cwd });
 
-    console.log(`[kpl-crawl] Git push OK: ${pushOut.trim().split('\n').pop()}`);
-    return { ok: true, hash: pushOut.trim() };
+    console.log(`[kpl-crawl] Git push OK: ${pushOut.split('\n').pop()}`);
+    return { ok: true, hash: pushOut };
   } catch (err) {
     console.error('[kpl-crawl] Git push FAILED:', err.message);
     return { ok: false, error: err.message };

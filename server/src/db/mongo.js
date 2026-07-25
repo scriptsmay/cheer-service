@@ -37,97 +37,81 @@ async function close() {
  */
 async function collection(name) {
   const db = await getDb();
+  const coll = db.collection(name);
+
+  // ── 链式查询构造器（兼容 TCB SDK 链式语法）──
+  // 支持 where().orderBy().limit().skip().get() 任意顺序组合
+  // where/orderBy/limit/skip 为链式（同步），get/count 为终端（异步）
+  function makeQuery(opts) {
+    opts = opts || {};
+    const filter = opts.filter || {};
+    const sort = opts.sort || null;
+    const limitN = opts.limit;
+    const skipN = opts.skip;
+
+    return {
+      where(f) {
+        // 合并条件（后者覆盖同名字段），与 TCB 多次 where 行为一致
+        return makeQuery({ filter: Object.assign({}, filter, f), sort, limit: limitN, skip: skipN });
+      },
+      orderBy(field, dir) {
+        const sortDir = dir === 'desc' ? -1 : 1;
+        return makeQuery({ filter, sort: Object.assign({}, sort || {}, { [field]: sortDir }), limit: limitN, skip: skipN });
+      },
+      limit(n) {
+        return makeQuery({ filter, sort, limit: n, skip: skipN });
+      },
+      skip(n) {
+        return makeQuery({ filter, sort, limit: limitN, skip: n });
+      },
+      async get() {
+        let cursor = coll.find(filter);
+        if (sort) cursor = cursor.sort(sort);
+        if (skipN) cursor = cursor.skip(skipN);
+        if (limitN != null) cursor = cursor.limit(limitN);
+        return { data: await cursor.toArray() };
+      },
+      async count() {
+        return await coll.countDocuments(filter);
+      },
+    };
+  }
+
   return {
     // ── 单文档操作 ──
     doc(id) {
       return {
         async get() {
-          const doc = await db.collection(name).findOne({ _id: id });
+          const doc = await coll.findOne({ _id: id });
           return { data: doc ? [doc] : [] };
         },
         async set(data) {
-          await db.collection(name).updateOne(
+          await coll.updateOne(
             { _id: id },
-            { $set: { ...data, _id: id } },
+            { $set: Object.assign({}, data, { _id: id }) },
             { upsert: true }
           );
         },
         async update(data) {
-          await db.collection(name).updateOne({ _id: id }, { $set: data });
+          await coll.updateOne({ _id: id }, { $set: data });
         },
         async remove() {
-          await db.collection(name).deleteOne({ _id: id });
+          await coll.deleteOne({ _id: id });
         },
       };
     },
 
-    // ── 条件查询 ──
-    where(filter) {
-      return {
-        async get() {
-          const docs = await db.collection(name).find(filter).toArray();
-          return { data: docs };
-        },
-        async limit(n) {
-          const docs = await db.collection(name).find(filter).limit(n).toArray();
-          return { data: docs };
-        },
-        async count() {
-          return await db.collection(name).countDocuments(filter);
-        },
-      };
-    },
-
-    // ── 排序+限制 ──
-    orderBy(field, dir) {
-      const sortDir = dir === 'desc' ? -1 : 1;
-      return {
-        limit(n) {
-          return {
-            async get() {
-              const docs = await db.collection(name)
-                .find({})
-                .sort({ [field]: sortDir })
-                .limit(n)
-                .toArray();
-              return { data: docs };
-            },
-          };
-        },
-        async get() {
-          const docs = await db.collection(name)
-            .find({})
-            .sort({ [field]: sortDir })
-            .toArray();
-          return { data: docs };
-        },
-      };
-    },
+    // ── 链式查询入口 ──
+    where(filter) { return makeQuery().where(filter); },
+    orderBy(field, dir) { return makeQuery().orderBy(field, dir); },
+    skip(offset) { return makeQuery().skip(offset); },
 
     // ── 新增 ──
     async add(doc) {
       // TCB add() 不指定 _id 时自动生成字符串 ID；MongoDB 用 ObjectId
       // 为兼容性，如果 doc 没有 _id 则保留 MongoDB 默认 ObjectId
-      const result = await db.collection(name).insertOne(doc);
+      const result = await coll.insertOne(doc);
       return { id: result.insertedId };
-    },
-
-    // ── 分页 ──
-    skip(offset) {
-      return {
-        limit(n) {
-          return {
-            async get() {
-              const docs = await db.collection(name)
-                .find({})
-                .skip(offset)
-                .limit(n)
-                .toArray();
-              return { data: docs };
-            },
-          };
-        },
-      };
     },
   };
 }
@@ -144,6 +128,28 @@ async function runTransaction(fn) {
       const db = await getDb();
       const transactionCollection = (name) => {
         const coll = db.collection(name);
+        // 事务内链式查询构造器（与主 collection 行为一致，附带 session）
+        function makeQuery(opts) {
+          opts = opts || {};
+          const filter = opts.filter || {};
+          const sort = opts.sort || null;
+          const limitN = opts.limit;
+          const skipN = opts.skip;
+          return {
+            where(f) { return makeQuery({ filter: Object.assign({}, filter, f), sort, limit: limitN, skip: skipN }); },
+            orderBy(field, dir) { return makeQuery({ filter, sort: Object.assign({}, sort || {}, { [field]: dir === 'desc' ? -1 : 1 }), limit: limitN, skip: skipN }); },
+            limit(n) { return makeQuery({ filter, sort, limit: n, skip: skipN }); },
+            skip(n) { return makeQuery({ filter, sort, limit: limitN, skip: n }); },
+            async get() {
+              let cursor = coll.find(filter, { session });
+              if (sort) cursor = cursor.sort(sort);
+              if (skipN) cursor = cursor.skip(skipN);
+              if (limitN != null) cursor = cursor.limit(limitN);
+              return { data: await cursor.toArray() };
+            },
+            async count() { return await coll.countDocuments(filter, { session }); },
+          };
+        }
         return {
           doc(id) {
             return {
@@ -166,18 +172,9 @@ async function runTransaction(fn) {
               },
             };
           },
-          where(filter) {
-            return {
-              async get() {
-                const docs = await coll.find(filter, { session }).toArray();
-                return { data: docs };
-              },
-              async limit(n) {
-                const docs = await coll.find(filter, { session }).limit(n).toArray();
-                return { data: docs };
-              },
-            };
-          },
+          where(filter) { return makeQuery().where(filter); },
+          orderBy(field, dir) { return makeQuery().orderBy(field, dir); },
+          skip(offset) { return makeQuery().skip(offset); },
           async add(doc) {
             const result = await coll.insertOne(doc, { session });
             return { id: result.insertedId };
