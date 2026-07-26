@@ -34,7 +34,8 @@ const {
 } = cheerExports.__test || cheerExports;
 
 // ── 导入数据处理层 ──
-const { collection, close: closeDb } = require(path.join(serverSrc, 'db', 'mongo'));
+// mongo 模块延迟导入：--data-file 或 --no-data 模式下完全跳过数据库连接
+const fs = require('node:fs');
 const { getEffectiveConfig } = require(path.join(serverSrc, 'services', 'ai-config'));
 
 // ── 工具 ──
@@ -67,7 +68,20 @@ async function main() {
   if (options.text) console.log(`补充文字：${options.text}`);
 
   // 加载赛季数据
-  const overview = options.useData ? await getLatestOverview() : null;
+  // 三种模式：--data-file（本地文件）> --no-data（纯情绪）> 默认（MongoDB）
+  let overview = null;
+  let needDbClose = false;
+  if (options.dataFile) {
+    const raw = fs.readFileSync(options.dataFile, 'utf8');
+    overview = JSON.parse(raw);
+    console.log(`数据来源：本地文件 ${options.dataFile}`);
+  } else if (options.useData) {
+    const { getLatestOverview } = cheerExports.__test || cheerExports;
+    const { close: closeDb } = require(path.join(serverSrc, 'db', 'mongo'));
+    overview = await getLatestOverview();
+    needDbClose = true;
+    if (needDbClose) await closeDb();
+  }
   const source = buildGroundedSource(overview);
   console.log(`可引用数据：${source.promptLines.length ? source.promptLines.join('；') : '无（纯情绪模式）'}`);
 
@@ -140,7 +154,6 @@ async function main() {
   console.log(`总 Tokens：${totalTokens || '未返回'}`);
   console.log('════════════════════════════════════');
 
-  await closeDb();
   if (failCount > 0) process.exitCode = 1;
 }
 
@@ -190,6 +203,7 @@ function parseArgs(args) {
     count: 2,
     text: '',
     useData: true,
+    dataFile: '',
     showPrompt: true,
     help: false,
     baseUrl: '',
@@ -203,6 +217,9 @@ function parseArgs(args) {
       options.help = true;
     } else if (arg === '--no-data') {
       options.useData = false;
+    } else if (arg === '--data-file') {
+      options.dataFile = readOptionValue(args, ++index, '--data-file');
+      options.useData = false; // --data-file 隐含不查 MongoDB
     } else if (arg === '--no-prompt') {
       options.showPrompt = false;
     } else if (arg === '--show-prompt') {
@@ -262,6 +279,7 @@ function printHelp() {
   --mood <mood>      victory、low、daily、hope，默认 daily
   --count <n>        生成次数，1 到 20，默认 2
   --text <text>      用户补充内容，最多 120 个字符
+  --data-file <path> 从本地 JSON 文件读取赛季数据（无需 MongoDB）
   --no-data          不读取赛季数据，生成纯情绪文案
   --no-prompt        不输出提示词
   --show-prompt      输出实际发送给模型的提示词（默认开启）
@@ -274,6 +292,7 @@ function printHelp() {
   node --env-file=.env scripts/preview-ai-cheer.js --mood victory --count 3
   node --env-file=.env scripts/preview-ai-cheer.js --mood low --text "有点低迷" --count 5
   node --env-file=.env scripts/preview-ai-cheer.js --mood hope --count 3 --no-data
+  node --env-file=.env scripts/preview-ai-cheer.js --mood daily --data-file ../kpl_data_daily/data/derived/KPL2026S2/overview.json
   node --env-file=.env scripts/preview-ai-cheer.js --mood daily --base-url https://api.deepseek.com/v1 --api-key sk-xxx --model deepseek-chat`);
 }
 
