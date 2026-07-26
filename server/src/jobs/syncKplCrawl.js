@@ -203,8 +203,42 @@ async function gitPush() {
     console.log(`[kpl-crawl] Git commit (${method}): ${changedFiles} file(s) changed`);
     await runGit(['commit', '-m', `auto: daily crawl ${dateStr}`], { cwd });
 
-    // 5. push（SSH 直连 origin；HTTPS 用一次性 token URL，不改 permanent remote）
+    // 5. fetch + rebase —— 防止非快进 push 失败
+    // deploy.sh 上传的是工作区快照(tar)而非 git clone,容器内仓库可能落后于 origin
+    // (例如开发机手动 push 了 fix,或多实例同时采集);此时直接 push 会被拒(non-fast-forward)。
+    // fetch 后 rebase 把本地新 commit 重放到最新 origin/<branch> 之上;
+    // pushWithRetry 只能扛网络抖动,对版本分叉无效,所以必须在此先对齐。
     const branch = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
+    try {
+      await runGit(['fetch', 'origin', branch], { cwd });
+    } catch (err) {
+      // fetch 失败(网络抖动)不阻断 —— pushWithRetry 仍会尝试,最坏只是再失败一次
+      console.warn(`[kpl-crawl] git fetch failed (will attempt push anyway): ${err.message}`);
+    }
+    try {
+      const rebaseOut = await runGit(['rebase', `origin/${branch}`], { cwd });
+      // origin 无新 commit 时 rebase 是 no-op(退出 0),有新 commit 则重放本地 commit
+      if (rebaseOut && !/up to date/i.test(rebaseOut)) {
+        console.log(`[kpl-crawl] Rebased onto origin/${branch}: ${rebaseOut.slice(-200)}`);
+      }
+    } catch (err) {
+      // rebase 冲突 —— abort 回到 commit 前,本次跳过 push(不丢数据,下次 cron 重试)
+      // 不强行 --continue 或手动解冲突:数据文件冲突需人工判断,自动合并风险高
+      console.error(`[kpl-crawl] Rebase conflict, aborting: ${err.message}`);
+      try {
+        await runGit(['rebase', '--abort'], { cwd });
+      } catch (_) {
+        /* 可能已不在 rebase 中,忽略 */
+      }
+      return {
+        ok: false,
+        skipped: true,
+        reason: 'rebase conflict, push skipped',
+        error: maskUrl(err.message),
+      };
+    }
+
+    // 6. push（SSH 直连 origin；HTTPS 用一次性 token URL，不改 permanent remote）
     const pushOut = await pushWithRetry(pushUrl, branch, cwd);
 
     return { ok: true, hash: pushOut };
@@ -241,16 +275,65 @@ async function hasDataChanged(cwd) {
 }
 
 /**
+ * 采集前同步远程代码 —— 拉取 origin 最新提交,确保用最新 .py 脚本采集
+ * deploy.sh 上传的是工作区快照(tar),容器内代码可能落后于 origin
+ * (例如开发机 push 了 Referer/player_info 修复);采集前先 rebase 到最新,
+ * 既能用修复后的代码采集,又让采集后 push 几乎不会遇到非快进问题。
+ *
+ * 冲突策略:rebase 冲突时 abort,保留本地状态继续采集(降级,不阻断核心任务)
+ * —— 采集后 gitPush 内的 rebase 会再次尝试对齐
+ * fetch 网络失败也不阻断:用本地代码采集,push 时再重试
+ *
+ * @returns {Promise<{ok: boolean, skipped?: boolean, reason?: string}>}
+ */
+async function gitSyncBeforeCrawl() {
+  if (!GITHUB_REPO) {
+    return { ok: true, skipped: true, reason: 'missing GITHUB_REPO' };
+  }
+  const cwd = KPL_DIR;
+  try {
+    const branch = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
+    await runGit(['fetch', 'origin', branch], { cwd });
+    const rebaseOut = await runGit(['rebase', `origin/${branch}`], { cwd });
+    if (rebaseOut && !/up to date/i.test(rebaseOut)) {
+      console.log(`[kpl-crawl] Pre-crawl sync: rebased onto origin/${branch}`);
+    } else {
+      console.log('[kpl-crawl] Pre-crawl sync: already up to date');
+    }
+    return { ok: true };
+  } catch (err) {
+    const masked = maskUrl(err.message);
+    // rebase 冲突 → abort 回退,继续用本地代码采集(不阻断采集)
+    if (/rebase|conflict/i.test(err.message)) {
+      console.warn(`[kpl-crawl] Pre-crawl sync: rebase conflict, aborting: ${masked}`);
+      try {
+        await runGit(['rebase', '--abort'], { cwd });
+      } catch (_) {
+        /* 可能已不在 rebase 中,忽略 */
+      }
+    } else {
+      // fetch 网络失败等 → 继续(采集后 gitPush 会再尝试)
+      console.warn(`[kpl-crawl] Pre-crawl sync failed (continue with local code): ${masked}`);
+    }
+    return { ok: false, skipped: true, reason: masked };
+  }
+}
+
+/**
  * 主采集任务 — 替代 GH Actions daily-fetch
+ * 0. git sync               (采集前拉取最新代码,见 gitSyncBeforeCrawl)
  * 1. python main.py          (数据采集 + AI 后处理)
  * 2. python fetch-schedule.py (赛程采集)
  * 3. 检测数据变更             (git diff，供调用方决定是否入库)
- * 4. git push                (备份到 GitHub)
+ * 4. git push                (备份到 GitHub，含 fetch+rebase 对齐)
  *
- * @returns {Promise<{main, schedule, git, hasChanges: boolean}>}
+ * @returns {Promise<{sync, main, schedule, git, hasChanges: boolean}>}
  */
 async function syncKplCrawl() {
-  const results = { main: null, schedule: null, git: null, hasChanges: false };
+  const results = { sync: null, main: null, schedule: null, git: null, hasChanges: false };
+
+  // 采集前同步远程代码:确保用最新 .py 脚本采集 + 降低后续 push 冲突概率
+  results.sync = await gitSyncBeforeCrawl();
 
   try {
     results.main = await runPython('main.py');
