@@ -39,9 +39,6 @@ router.get('/me', async (req, res) => {
   const requestId = getRequestId(req);
   const identity = await resolveIdentity(req);
   if (!identity.ok) return errorResponse(res, 401, 'SESSION_REQUIRED', '匿名会话无效或已过期', requestId);
-  if (identity.kind !== 'session' && !identity.subjectId.startsWith('legacy:')) {
-    return errorResponse(res, 401, 'SESSION_REQUIRED', '打卡需要有效会话', requestId);
-  }
 
   try {
     return successResponse(res, await getMine(identity.subjectId), requestId);
@@ -72,9 +69,6 @@ router.post('/', async (req, res) => {
   const requestId = getRequestId(req);
   const identity = await resolveIdentity(req);
   if (!identity.ok) return errorResponse(res, 401, 'SESSION_REQUIRED', '匿名会话无效或已过期', requestId);
-  if (identity.kind !== 'session' && !identity.subjectId.startsWith('legacy:')) {
-    return errorResponse(res, 401, 'SESSION_REQUIRED', '打卡需要有效会话', requestId);
-  }
 
   const body = req.body || {};
   const clientId = normalizeClientId(body.client_id || body._cid || '');

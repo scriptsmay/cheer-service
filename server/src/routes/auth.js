@@ -8,7 +8,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const config = require('../config/env');
 const { successResponse, errorResponse } = require('../services/response');
-const { getRequestId } = require('../utils/helpers');
+const { getRequestId, hashValue, normalizeClientId, getClientIp } = require('../utils/helpers');
 
 const router = express.Router();
 
@@ -26,6 +26,23 @@ router.post('/login', async (req, res) => {
   );
 
   return successResponse(res, { access_token: token, expires_in: 604800 }, requestId);
+});
+
+// 匿名登录 — 替代原 CloudBase signInAnonymously
+// 前端可调用此端点获取匿名 JWT，也可不调用直接由 resolveIdentity 回退
+router.post('/anonymous', async (req, res) => {
+  const requestId = getRequestId(req);
+  const clientId = normalizeClientId(req.body?._cid || req.body?.client_id || '');
+  const anonSource = clientId || getClientIp(req);
+  const subjectId = `anon:${hashValue(anonSource, config.ipHashSalt)}`;
+
+  const token = jwt.sign(
+    { sub: subjectId, anonymous: true },
+    config.jwtSecret,
+    { expiresIn: '30d' }
+  );
+
+  return successResponse(res, { access_token: token, expires_in: 2592000, anonymous: true }, requestId);
 });
 
 module.exports = router;

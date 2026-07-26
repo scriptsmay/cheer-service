@@ -24,9 +24,9 @@ try { syncKplCrawl = require('../jobs/syncKplCrawl').syncKplCrawl; } catch (_) {
 try { syncData = require('../jobs/syncData').syncData; } catch (_) {}
 try { syncSchedule = require('../jobs/syncSchedule').syncSchedule; } catch (_) {}
 
-// ── 鉴权守卫：硬拦截 ──
+// ── 鉴权守卫：硬拦截（仅允许 JWT 登录用户，拒绝匿名/旧版 Token）──
 function requireAuth(req, res, next) {
-  if (req.identity && req.identity.ok) return next();
+  if (req.identity && req.identity.ok && req.identity.kind === 'session') return next();
   return res.status(401).json({ code: 'UNAUTHORIZED', message: '请先登录' });
 }
 

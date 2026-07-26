@@ -4,3 +4,4 @@ data/export/
 .env
 .env.deploy
 *.log
+.workbuddy/
