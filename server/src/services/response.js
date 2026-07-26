@@ -24,7 +24,7 @@ function successResponse(res, payload, requestId) {
 
   res.setHeader('X-Request-Id', requestId);
   res.setHeader('Cache-Control', 'no-store');
-  res.json({ ...payload, code: 200, message: 'ok', data: payload });
+  res.json({ code: 200, message: 'ok', data: payload });
 }
 
 /**
