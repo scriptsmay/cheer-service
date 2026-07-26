@@ -165,21 +165,21 @@ function buildGroundedSource(overview) {
   const heroes = Array.isArray(data.hero_stats) ? [...data.hero_stats] : [];
   heroes.sort((a, b) => Number((b && b.battles) || 0) - Number((a && a.battles) || 0));
   const refs = [];
-  const promptLines = [];
-  addRef(refs, promptLines, `${statsLabel} KDA`, stats.kda_ratio, 'season_summaries');
-  addRef(refs, promptLines, `${statsLabel}胜率`, formatRate(stats.win_rate), 'season_summaries');
-  addRef(refs, promptLines, `${statsLabel}对局数`, stats.battles ?? stats.total_battles, 'season_summaries');
-  addRef(refs, promptLines, `${statsLabel} MVP 次数`, stats.mvp ?? stats.mvp_count, 'season_summaries');
-  addRef(refs, promptLines, `${statsLabel}场均助攻`, stats.avg_assists, 'season_summaries');
-  const heroSummary = heroes.filter((item) => isObject(item) && typeof item.hero_name === 'string' && item.hero_name).slice(0, 3).map(formatHeroSummary).join('、');
-  addRef(refs, promptLines, '常用英雄（按出场数）', heroSummary, 'season_summaries');
-  return { refs: refs.slice(0, 6), promptLines: promptLines.slice(0, 6), snapshotAt: normalizeSnapshotAt(overview.updated_at || overview.source_snapshot_at) };
+  addRef(refs, `${statsLabel} KDA`, stats.kda_ratio, 'season_summaries');
+  addRef(refs, `${statsLabel}胜率`, formatRate(stats.win_rate), 'season_summaries');
+  addRef(refs, `${statsLabel}对局数`, stats.battles ?? stats.total_battles, 'season_summaries');
+  addRef(refs, `${statsLabel} MVP 次数`, stats.mvp ?? stats.mvp_count, 'season_summaries');
+  addRef(refs, `${statsLabel}场均助攻`, stats.avg_assists, 'season_summaries');
+  const heroSummary = heroes.filter((item) => isObject(item) && typeof item.hero_name === 'string' && item.hero_name).slice(0, 5).map(formatHeroSummary).join('、');
+  addRef(refs, '常用英雄（按出场数）', heroSummary, 'season_summaries');
+  // 只保留前 6 条数据，避免 prompt 太长
+  const trimmedRefs = refs.slice(0, 6);
+  return { refs: trimmedRefs, promptLines: trimmedRefs.map((r) => `${r.label}：${r.value}`), snapshotAt: normalizeSnapshotAt(overview.updated_at || overview.source_snapshot_at) };
 }
 
-function addRef(refs, promptLines, label, value, source) {
+function addRef(refs, label, value, source) {
   if (value === null || value === undefined || value === '' || value === '暂无') return;
   refs.push({ label, value: String(value), source });
-  promptLines.push(`${label}：${String(value)}`);
 }
 
 function formatHeroSummary(hero) {
@@ -327,7 +327,7 @@ async function markReceipt(receiptId, status) {
   try {
     const col = await collection('usage_limits');
     await col.doc(receiptId).update({ status, updated_at: new Date().toISOString() });
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function readLimit(name, fallback) {
