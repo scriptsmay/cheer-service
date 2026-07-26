@@ -13,6 +13,33 @@ const GITHUB_REPO = process.env.GITHUB_REPO || ''; // e.g. "wetsk/kpl-data-daily
 const GIT_USER = process.env.GIT_USER_NAME || 'KPL Data Bot';
 const GIT_EMAIL = process.env.GIT_USER_EMAIL || 'bot@kplwuyan.site';
 
+// derived 文件中每次采集都会刷新的时间戳字段，不作为数据变更依据
+// git diff -I 按行忽略匹配这些模式的变更，只有数据内容真正变化才算
+const TIMESTAMP_IGNORE_PATTERNS = ['"generated_at"', '"build_id"', '"updated_at"'];
+
+// AI 生成文件——每次调用 LLM 可能产生不同文本（温度 > 0），不代表源数据有更新
+// hasDataChanged 排除这些文件；gitPush 仍会 commit 它们（AI 内容变化值得备份）
+// - ai-insights.json: AI 生成的洞察文案
+// - reports/daily/: AI 生成的日报 markdown（ai_insights.py 同时输出两者）
+function isAiGeneratedFile(filepath) {
+  if (filepath.endsWith('ai-insights.json')) return true;
+  if (filepath.includes('/reports/daily/') || filepath.includes('\\reports\\daily\\')) return true;
+  return false;
+}
+
+/**
+ * 构建 git diff 参数（附加时间戳忽略 -I）
+ * @param {string[]} baseArgs - 基础 diff 参数，如 ['diff', '--cached', '--name-only']
+ * @returns {string[]}
+ */
+function buildDiffArgs(baseArgs) {
+  const args = [...baseArgs];
+  for (const p of TIMESTAMP_IGNORE_PATTERNS) {
+    args.push('-I', p);
+  }
+  return args;
+}
+
 // git push 认证方式: SSH(默认) 或 HTTPS+token
 // SSH 模式靠容器内 SSH key + GIT_SSH_COMMAND 认证, 不依赖 GITHUB_TOKEN
 // HTTPS 模式回退用 token(仅作 fallback, 不推荐: token 会进命令行/日志)
@@ -164,8 +191,8 @@ async function gitPush() {
     // 2. stage 所有变更
     await runGit(['add', '-A'], { cwd });
 
-    // 3. 检查是否有变更
-    const diffOut = await runGit(['diff', '--cached', '--name-only'], { cwd });
+    // 3. 检查是否有变更（忽略时间戳字段，避免无意义的 commit）
+    const diffOut = await runGit(buildDiffArgs(['diff', '--cached', '--name-only']), { cwd });
     if (!diffOut.trim()) {
       console.log('[kpl-crawl] Git push skipped: no changes');
       return { ok: true, skipped: true, reason: 'no changes' };
@@ -189,13 +216,41 @@ async function gitPush() {
 }
 
 /**
+ * 检测采集后数据是否有变更
+ * 用 git diff --cached 检测；git 不可用时 fallback 为 true（保守策略：宁可多同步不漏）
+ * @param {string} cwd - git 仓库目录
+ * @returns {Promise<boolean>}
+ */
+async function hasDataChanged(cwd) {
+  try {
+    await runGit(['add', '-A'], { cwd });
+    const diffOut = await runGit(buildDiffArgs(['diff', '--cached', '--name-only']), { cwd });
+    const allFiles = diffOut.trim().split('\n').filter(Boolean);
+    // 排除 AI 生成文件——LLM 每次调用可能产生不同文本，不代表源数据有更新
+    const files = allFiles.filter(f => !isAiGeneratedFile(f));
+    const changed = files.length > 0;
+    if (allFiles.length !== files.length) {
+      console.log(`[kpl-crawl] Ignored ${allFiles.length - files.length} AI-generated file(s) in change detection`);
+    }
+    console.log(`[kpl-crawl] Data changed: ${changed} (${files.length} file(s))`);
+    return changed;
+  } catch (err) {
+    console.warn('[kpl-crawl] Cannot detect data changes, assuming changed:', err.message);
+    return true;
+  }
+}
+
+/**
  * 主采集任务 — 替代 GH Actions daily-fetch
  * 1. python main.py          (数据采集 + AI 后处理)
  * 2. python fetch-schedule.py (赛程采集)
- * 3. git push                (备份到 GitHub)
+ * 3. 检测数据变更             (git diff，供调用方决定是否入库)
+ * 4. git push                (备份到 GitHub)
+ *
+ * @returns {Promise<{main, schedule, git, hasChanges: boolean}>}
  */
 async function syncKplCrawl() {
-  const results = { main: null, schedule: null, git: null };
+  const results = { main: null, schedule: null, git: null, hasChanges: false };
 
   try {
     results.main = await runPython('main.py');
@@ -210,6 +265,9 @@ async function syncKplCrawl() {
     console.error('[kpl-crawl] fetch-schedule.py error:', e.message);
     results.schedule = { ok: false, error: e.message };
   }
+
+  // 检测采集后数据是否有变更（在 git push 之前，独立检测不依赖 push 结果）
+  results.hasChanges = await hasDataChanged(KPL_DIR);
 
   // 采集完成后自动 git push
   results.git = await gitPush();

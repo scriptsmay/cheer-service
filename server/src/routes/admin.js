@@ -288,26 +288,31 @@ router.post('/sync/crawl', requireAuth, async (req, res) => {
     const crawlResult = await syncKplCrawl();
     console.log('[admin] Manual crawl completed:', JSON.stringify(crawlResult));
 
-    // 采集完成后自动入库，让 sync/status 实时反映
-    if (syncData) {
-      console.log('[admin] Triggering syncData...');
-      try {
-        const dataResult = await syncData();
-        console.log('[admin] syncData completed:', JSON.stringify(dataResult));
-      } catch (e) {
-        console.error('[admin] syncData failed:', e.message);
+    // 采集完成后，有数据变更才自动入库
+    if (crawlResult.hasChanges) {
+      console.log('[admin] Data changed, triggering syncData + syncSchedule');
+      if (syncData) {
+        console.log('[admin] Triggering syncData...');
+        try {
+          const dataResult = await syncData();
+          console.log('[admin] syncData completed:', JSON.stringify(dataResult));
+        } catch (e) {
+          console.error('[admin] syncData failed:', e.message);
+        }
       }
-    }
-    if (syncSchedule) {
-      console.log('[admin] Triggering syncSchedule...');
-      try {
-        const scheduleResult = await syncSchedule();
-        console.log('[admin] syncSchedule completed:', JSON.stringify(scheduleResult));
-      } catch (e) {
-        console.error('[admin] syncSchedule failed:', e.message);
+      if (syncSchedule) {
+        console.log('[admin] Triggering syncSchedule...');
+        try {
+          const scheduleResult = await syncSchedule();
+          console.log('[admin] syncSchedule completed:', JSON.stringify(scheduleResult));
+        } catch (e) {
+          console.error('[admin] syncSchedule failed:', e.message);
+        }
       }
+      console.log('[admin] Manual crawl + sync all done');
+    } else {
+      console.log('[admin] No data changes, skipping syncData + syncSchedule');
     }
-    console.log('[admin] Manual crawl + sync all done');
   } catch (e) {
     console.error('[admin] Manual crawl failed:', e.message);
   }

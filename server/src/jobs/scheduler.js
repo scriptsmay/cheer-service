@@ -15,26 +15,25 @@ const { cleanupAiReports } = require('./cleanupAiReports');
 
 
 function startScheduler() {
-  // 03:00 Python 采集 (main.py + fetch-schedule.py)
-  cron.schedule('0 3 * * *', async () => {
+  // 03:00, 09:00, 15:00, 21:00 Python 采集 (main.py + fetch-schedule.py)
+  // 第三方 API 通常在比赛后 18-22h 更新选手数据，6 小时一次能在更新后及时拉取
+  // 采集后有数据变更才自动触发 syncData + syncSchedule 入库
+  cron.schedule('0 3,9,15,21 * * *', async () => {
     if (!config.crawlEnabled) {
       console.log('[scheduler] syncKplCrawl skipped (CRAWL_ENABLED=false)');
       return;
     }
-    console.log('[scheduler] Running syncKplCrawl at 03:00');
-    try { await syncKplCrawl(); } catch (e) { console.error('[scheduler] syncKplCrawl error:', e.message); }
-  });
-
-  // 04:00 赛季概览入库（本地文件读取）
-  cron.schedule('0 4 * * *', async () => {
-    console.log('[scheduler] Running syncData at 04:00');
-    try { await syncData(); } catch (e) { console.error('[scheduler] syncData error:', e.message); }
-  });
-
-  // 06:00 赛程入库（本地文件读取）
-  cron.schedule('0 6 * * *', async () => {
-    console.log('[scheduler] Running syncSchedule at 06:00');
-    try { await syncSchedule(); } catch (e) { console.error('[scheduler] syncSchedule error:', e.message); }
+    console.log('[scheduler] Running syncKplCrawl at', new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }));
+    try {
+      const results = await syncKplCrawl();
+      if (results.hasChanges) {
+        console.log('[scheduler] Data changed, running syncData + syncSchedule');
+        try { await syncData(); } catch (e) { console.error('[scheduler] syncData error:', e.message); }
+        try { await syncSchedule(); } catch (e) { console.error('[scheduler] syncSchedule error:', e.message); }
+      } else {
+        console.log('[scheduler] No data changes, skipping syncData + syncSchedule');
+      }
+    } catch (e) { console.error('[scheduler] syncKplCrawl error:', e.message); }
   });
 
   cron.schedule('*/10 * * * *', async () => {
