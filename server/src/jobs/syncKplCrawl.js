@@ -13,12 +13,25 @@ const GITHUB_REPO = process.env.GITHUB_REPO || ''; // e.g. "wetsk/kpl-data-daily
 const GIT_USER = process.env.GIT_USER_NAME || 'KPL Data Bot';
 const GIT_EMAIL = process.env.GIT_USER_EMAIL || 'bot@kplwuyan.site';
 
-// derived 文件中每次采集都会刷新的时间戳字段，不作为数据变更依据
+// derived 文件中每次采集都会刷新的时间戳/元数据字段，不作为数据变更依据
 // git diff -I 按行忽略匹配这些模式的变更，只有数据内容真正变化才算
-const TIMESTAMP_IGNORE_PATTERNS = ['"generated_at"', '"build_id"', '"updated_at"'];
+// - generated_at / build_id / updated_at: 每次采集必定刷新的时间戳
+// - mtime: manifest.json 中记录的文件修改时间，跟随采集时间变化
+// - ai_elapsed_seconds: AI 推理耗时，每次略有不同
+// - hash: manifest.json 中各文件的 SHA256，上游时间戳变了 hash 就变（级联噪音）
+const TIMESTAMP_IGNORE_PATTERNS = [
+  '"generated_at"',
+  '"build_id"',
+  '"updated_at"',
+  '"mtime"',
+  '"ai_elapsed_seconds"',
+  '"hash"',
+];
 
 // AI 生成文件——每次调用 LLM 可能产生不同文本（温度 > 0），不代表源数据有更新
-// hasDataChanged 排除这些文件；gitPush 仍会 commit 它们（AI 内容变化值得备份）
+// hasDataChanged 和 gitPush 都排除这些文件的变更检测：
+// - 如果只有 AI 文件变了（LLM 随机性 / fallback requestId 变化），不触发 commit
+// - 如果真实数据变了，gitPush 仍会 stage+commit AI 文件（随真实数据一起备份）
 // - ai-insights.json: AI 生成的洞察文案
 // - reports/daily/: AI 生成的日报 markdown（ai_insights.py 同时输出两者）
 function isAiGeneratedFile(filepath) {
@@ -89,17 +102,17 @@ function maskUrl(text) {
 /**
  * git push 带重试 — 国内出口到 GitHub 抖动是常态(RST/超时), 重试可显著提升成功率
  * git push 是幂等的(ref 已 up-to-date 时第二次返回成功), 重试安全
- * @param {string} pushUrl
+ * @param {string} pushTarget - push 目标 (通常是 'origin')
  * @param {string} branch
  * @param {string} cwd
  * @param {number} maxRetries
  * @returns {Promise<string>} push stdout
  */
-async function pushWithRetry(pushUrl, branch, cwd, maxRetries = 3) {
+async function pushWithRetry(pushTarget, branch, cwd, maxRetries = 3) {
   let lastErr;
   for (let i = 0; i < maxRetries; i++) {
     try {
-      const out = await runGit(['push', pushUrl, branch], { cwd });
+      const out = await runGit(['push', pushTarget, branch], { cwd });
       console.log(`[kpl-crawl] Git push OK (attempt ${i + 1}/${maxRetries})`);
       return out;
     } catch (err) {
@@ -191,16 +204,18 @@ async function gitPush() {
     // 2. stage 所有变更
     await runGit(['add', '-A'], { cwd });
 
-    // 3. 检查是否有变更（忽略时间戳字段，避免无意义的 commit）
+    // 3. 检查是否有真实数据变更（忽略时间戳/元数据字段 + 排除 AI 生成文件）
+    // 只有真实数据变化才 commit；纯时间戳刷新或 AI fallback 噪音不提交
     const diffOut = await runGit(buildDiffArgs(['diff', '--cached', '--name-only']), { cwd });
-    if (!diffOut.trim()) {
-      console.log('[kpl-crawl] Git push skipped: no changes');
-      return { ok: true, skipped: true, reason: 'no changes' };
+    const allChangedFiles = diffOut.trim().split('\n').filter(Boolean);
+    const realChangedFiles = allChangedFiles.filter(f => !isAiGeneratedFile(f));
+    if (realChangedFiles.length === 0) {
+      console.log(`[kpl-crawl] Git push skipped: no real data changes (${allChangedFiles.length} file(s) with only timestamp/AI noise)`);
+      return { ok: true, skipped: true, reason: 'no real data changes' };
     }
 
-    // 4. commit
-    const changedFiles = diffOut.trim().split('\n').filter(Boolean).length;
-    console.log(`[kpl-crawl] Git commit (${method}): ${changedFiles} file(s) changed`);
+    // 4. commit（stage 已包含 AI 文件，随真实数据一起备份）
+    console.log(`[kpl-crawl] Git commit (${method}): ${realChangedFiles.length} data file(s) + ${allChangedFiles.length - realChangedFiles.length} AI file(s)`);
     await runGit(['commit', '-m', `auto: daily crawl ${dateStr}`], { cwd });
 
     // 5. fetch + rebase —— 防止非快进 push 失败
@@ -238,10 +253,33 @@ async function gitPush() {
       };
     }
 
-    // 6. push（SSH 直连 origin；HTTPS 用一次性 token URL，不改 permanent remote）
-    const pushOut = await pushWithRetry(pushUrl, branch, cwd);
-
-    return { ok: true, hash: pushOut };
+    // 6. push
+    // SSH 模式: push 到 'origin' (remote name), git 会自动更新 origin/<branch> 追踪引用
+    // HTTPS 模式: 临时把 origin URL 换成带 token 的 URL, push 后恢复原值
+    //   (不能用裸 URL 做 push: git push <url> <branch> 不会更新 remote-tracking ref,
+    //    导致 git status 误报 "ahead of origin/main", 虽然实际已推上去)
+    if (USE_SSH) {
+      const pushOut = await pushWithRetry('origin', branch, cwd);
+      return { ok: true, hash: pushOut };
+    } else {
+      // HTTPS fallback: 临时替换 origin URL → push → 恢复
+      let origUrl = '';
+      try {
+        origUrl = await runGit(['remote', 'get-url', 'origin'], { cwd });
+      } catch (_) {
+        /* origin 可能不存在,忽略 */
+      }
+      await runGit(['remote', 'set-url', 'origin', pushUrl], { cwd });
+      try {
+        const pushOut = await pushWithRetry('origin', branch, cwd);
+        return { ok: true, hash: pushOut };
+      } finally {
+        // 恢复原 URL (防止 token 残留在 git config)
+        if (origUrl) {
+          await runGit(['remote', 'set-url', 'origin', origUrl], { cwd }).catch(() => {});
+        }
+      }
+    }
   } catch (err) {
     const masked = maskUrl(err.message);
     console.error('[kpl-crawl] Git push FAILED:', masked);
