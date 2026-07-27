@@ -6,6 +6,7 @@
  */
 
 const express = require('express');
+const path = require('path');
 const config = require('./config/env');
 const corsMiddleware = require('./middleware/cors');
 const rateLimitMiddleware = require('./middleware/rateLimit');
@@ -54,6 +55,10 @@ app.use('/api/ask', contentFilterMiddleware, askRoute);
 app.use('/api/checkins', checkinRoute);
 // 运维接口
 app.use('/api/admin', adminRoute);
+
+// ── 静态资源（管理页面前端：admin.html / admin.css / admin.js）──
+// 与后端 API 分离，便于独立维护；HTML 由 GET /api/admin 以 sendFile 返回
+app.use('/admin-static', express.static(path.join(__dirname, '..', 'public')));
 
 // ── 健康检查 ──
 app.get('/api/health', async (req, res) => {

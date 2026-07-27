@@ -22,6 +22,7 @@ RUN pip3 install --break-system-packages \
     -r kpl-requirements.txt
 
 COPY server/src/ ./server/src/
+COPY server/public/ ./server/public/
 
 EXPOSE 3000
 

@@ -12,13 +12,14 @@ const { syncSchedule } = require('./syncSchedule');
 const { syncScheduleLive } = require('./syncScheduleLive');
 const { weeklyStory } = require('./weeklyStory');
 const { cleanupAiReports } = require('./cleanupAiReports');
+const { CRON } = require('./schedules');
 
 
 function startScheduler() {
   // 03:00, 09:00, 15:00, 21:00 Python 采集 (main.py + fetch-schedule.py)
   // 第三方 API 通常在比赛后 18-22h 更新选手数据，6 小时一次能在更新后及时拉取
   // 采集后有数据变更才自动触发 syncData + syncSchedule 入库
-  cron.schedule('0 3,9,15,21 * * *', async () => {
+  cron.schedule(CRON.kpl_crawl, async () => {
     if (!config.crawlEnabled) {
       console.log('[scheduler] syncKplCrawl skipped (CRAWL_ENABLED=false)');
       return;
@@ -36,7 +37,7 @@ function startScheduler() {
     } catch (e) { console.error('[scheduler] syncKplCrawl error:', e.message); }
   });
 
-  cron.schedule('*/10 * * * *', async () => {
+  cron.schedule(CRON.kpl_live, async () => {
     if (!config.crawlEnabled) {
       return; // 静默跳过，避免每 10 分钟刷日志
     }
@@ -44,12 +45,12 @@ function startScheduler() {
     try { await syncScheduleLive(); } catch (e) { console.error('[scheduler] syncScheduleLive error:', e.message); }
   });
 
-  cron.schedule('0 5 * * 1', async () => {
+  cron.schedule(CRON.weekly_story, async () => {
     console.log('[scheduler] Running weeklyStory at Monday 05:00');
     try { await weeklyStory(); } catch (e) { console.error('[scheduler] weeklyStory error:', e.message); }
   });
 
-  cron.schedule('20 3 * * *', async () => {
+  cron.schedule(CRON.cleanup_ai, async () => {
     console.log('[scheduler] Running cleanupAiReports at 03:20');
     try { await cleanupAiReports(); } catch (e) { console.error('[scheduler] cleanupAiReports error:', e.message); }
   });
