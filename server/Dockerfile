@@ -3,7 +3,7 @@ FROM node:22-alpine
 # 国内镜像源加速（腾讯云机器走腾讯镜像，通用兼容阿里镜像备选）
 RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.cloud.tencent.com|g' /etc/apk/repositories && \
     apk upgrade --no-cache && \
-    apk add --no-cache python3 py3-pip git openssh-client
+    apk add --no-cache python3 py3-pip git openssh-client tzdata
 
 # 预置 github.com 的 SSH host key, 避免容器内首次 git push 卡在 host key 确认(spawn 无 tty 会失败)
 # 写到 /etc/ssh/ssh_known_hosts, 所有用户全局生效, 不依赖运行时 HOME
@@ -25,4 +25,4 @@ COPY server/src/ ./server/src/
 
 EXPOSE 3000
 
-CMD ["node", "server/src/app.js"]
+CMD ["sh", "-c", "node server/src/app.js 2>&1 | while IFS= read -r line; do echo \"$(date '+%Y-%m-%d %H:%M:%S') $line\"; done | tee -a /app/logs/api-$(date +%Y%m%d).log"]
