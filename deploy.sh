@@ -90,8 +90,13 @@ if [ -n "${KPL_SOURCE_DIR:-}" ] && [ -d "${KPL_SOURCE_DIR}" ]; then
   rm "$KPL_TAR"
   log "kpl-data-daily 同步完成"
 else
-  warn "kpl-data-daily 目录不存在 (${KPL_SOURCE_DIR:-未配置})，跳过同步"
-  warn "注意: 跳过后容器仍挂载 ${KPL_REMOTE_DIR}, 若该目录为空会导致采集报 No such file"
+  # 本地源目录不存在: 检查远程目录是否已有数据, 避免无意义的告警
+  if ssh -p "$DEPLOY_PORT" "${DEPLOY_USER}@${DEPLOY_HOST}" "[ -d ${KPL_REMOTE_DIR} ]" 2>/dev/null; then
+    log "本地 kpl-data-daily 目录不存在 (${KPL_SOURCE_DIR:-未配置})，远程 ${KPL_REMOTE_DIR} 已存在，跳过同步"
+  else
+    warn "kpl-data-daily 目录不存在 (${KPL_SOURCE_DIR:-未配置})，且远程 ${KPL_REMOTE_DIR} 也不存在"
+    warn "跳过后容器挂载 ${KPL_REMOTE_DIR} 将导致采集报 No such file"
+  fi
 fi
 
 # -- 2. 打包源码 --
