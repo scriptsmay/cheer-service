@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 配置管理 — Wuyan Cheer</title>
+<link rel="stylesheet" href="/admin-static/admin.css">
+</head>
+<body>
+<div class="container">
+
+  <!-- ═══ 登录面板 ═══ -->
+  <div id="loginPanel">
+    <h1>🔐 登录管理后台</h1>
+    <p class="sub">使用 APP_USERS 中的账号登录</p>
+    <div class="card">
+      <div class="form-group">
+        <label>用户名</label>
+        <input id="loginUser" type="text" placeholder="请输入用户名" autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label>密码</label>
+        <input id="loginPass" type="password" placeholder="请输入密码" autocomplete="current-password">
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="doLogin()">登录</button>
+      </div>
+      <div id="loginMsg"></div>
+    </div>
+  </div>
+
+  <!-- ═══ 管理面板 ═══ -->
+  <div id="adminPanel">
+    <div class="logout-bar">
+      <span>👤 已登录</span>
+      <button class="btn btn-danger" onclick="doLogout()">退出登录</button>
+    </div>
+    <h1>⚙️ Wuyan Cheer — AI 配置管理</h1>
+    <p class="sub">修改后即时生效，无需重启容器</p>
+
+    <!-- 当前状态 -->
+    <div class="card">
+      <h2>📋 当前配置 <span id="sourceBadge" class="badge badge-env"></span></h2>
+      <div style="font-size:13px;color:#666">
+        <div>Endpoint: <strong id="curUrl">-</strong></div>
+        <div>Model: <strong id="curModel">-</strong></div>
+        <div>API Key: <strong id="curKey">-</strong></div>
+      </div>
+    </div>
+
+    <!-- 修改配置 -->
+    <div class="card">
+      <h2>✏️ 修改配置</h2>
+      <div class="form-group">
+        <label>API Base URL</label>
+        <input id="inpUrl" placeholder="https://api.deepseek.com/v1">
+      </div>
+      <div class="form-group">
+        <label>API Key</label>
+        <input id="inpKey" type="password" placeholder="sk-xxxxxxxx">
+      </div>
+      <div class="form-group">
+        <label>Model</label>
+        <input id="inpModel" placeholder="deepseek-chat">
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="saveConfig()">💾 保存配置</button>
+        <button class="btn btn-outline" onclick="testAI()">🔍 测试连接</button>
+      </div>
+      <div id="cfgResult"></div>
+    </div>
+
+    <!-- 测试结果 -->
+    <div id="testResult"></div>
+
+    <!-- 数据采集 -->
+    <div class="card">
+      <h2>📡 KPL 数据采集</h2>
+      <p style="font-size:13px;color:#666;margin-bottom:12px">手动触发 Python 爬虫采集 KPL 数据（main.py + fetch-schedule.py），异步执行，结果见容器日志。</p>
+      <div id="syncStatus" style="margin-bottom:16px">
+        <div style="font-size:13px;color:#666;margin-bottom:8px">⏳ 加载中...</div>
+      </div>
+      <div id="scheduleInfo" style="margin-bottom:16px;padding:12px;background:#f8fafc;border-radius:8px">
+        <div style="font-size:12px;color:#666;margin-bottom:8px">⏰ 定时采集任务</div>
+        <div id="scheduleList"><div style="font-size:12px;color:#888">⏳ 加载中...</div></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-outline" id="crawlBtn" onclick="triggerCrawl()">🔄 手动采集</button>
+        <button class="btn btn-outline" id="refreshBtn" onclick="refreshSyncStatus()">↻ 刷新状态</button>
+      </div>
+      <div id="crawlResult"></div>
+    </div>
+  </div>
+
+</div>
+
+<script src="/admin-static/admin.js"></script>
+</body>
+</html>

@@ -44,6 +44,17 @@ command -v ssh >/dev/null 2>&1 || err "需要 ssh 客户端（Git Bash 自带）
 command -v scp >/dev/null 2>&1 || err "需要 scp 客户端"
 command -v tar >/dev/null 2>&1 || err "需要 tar"
 
+# ── 跨平台 tar 兼容 ──
+# macOS bsdtar 会将 com.apple.provenance 等扩展属性写入 PAX header,
+# 导致 Linux GNU tar 解压时报 "Ignoring unknown extended header keyword" 警告。
+# COPYFILE_DISABLE=1 抑制 Apple Double 文件 (._*) 生成 (Linux 上无效但无害)。
+# --no-xattrs + --no-mac-metadata 彻底去除 PAX 扩展属性 (macOS 12+ 支持)。
+export COPYFILE_DISABLE=1
+TAR_META_FLAGS=""
+if [ "$(uname)" = "Darwin" ]; then
+  TAR_META_FLAGS="--no-xattrs --no-mac-metadata"
+fi
+
 # 测试 SSH 连通性
 if ! ssh -o ConnectTimeout=5 -o BatchMode=yes -p "$DEPLOY_PORT" "${DEPLOY_USER}@${DEPLOY_HOST}" "echo ok" >/dev/null 2>&1; then
   warn "无法免密 SSH 连接到 ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PORT}"
@@ -63,6 +74,7 @@ if [ -n "${KPL_SOURCE_DIR:-}" ] && [ -d "${KPL_SOURCE_DIR}" ]; then
   log "同步 kpl-data-daily (${KPL_SOURCE_DIR}) → 远程 ${KPL_REMOTE_DIR}..."
   KPL_TAR="/tmp/kpl-data-daily-${TIMESTAMP}.tar.gz"
   tar -czf "$KPL_TAR" \
+    $TAR_META_FLAGS \
     --exclude='data/*.json' \
     --exclude='__pycache__' \
     --exclude='.venv' \
@@ -78,8 +90,13 @@ if [ -n "${KPL_SOURCE_DIR:-}" ] && [ -d "${KPL_SOURCE_DIR}" ]; then
   rm "$KPL_TAR"
   log "kpl-data-daily 同步完成"
 else
-  warn "kpl-data-daily 目录不存在 (${KPL_SOURCE_DIR:-未配置})，跳过同步"
-  warn "注意: 跳过后容器仍挂载 ${KPL_REMOTE_DIR}, 若该目录为空会导致采集报 No such file"
+  # 本地源目录不存在: 检查远程目录是否已有数据, 避免无意义的告警
+  if ssh -p "$DEPLOY_PORT" "${DEPLOY_USER}@${DEPLOY_HOST}" "[ -d ${KPL_REMOTE_DIR} ]" 2>/dev/null; then
+    log "本地 kpl-data-daily 目录不存在 (${KPL_SOURCE_DIR:-未配置})，远程 ${KPL_REMOTE_DIR} 已存在，跳过同步"
+  else
+    warn "kpl-data-daily 目录不存在 (${KPL_SOURCE_DIR:-未配置})，且远程 ${KPL_REMOTE_DIR} 也不存在"
+    warn "跳过后容器挂载 ${KPL_REMOTE_DIR} 将导致采集报 No such file"
+  fi
 fi
 
 # -- 2. 打包源码 --
@@ -87,6 +104,7 @@ log "打包源码（排除 node_modules / data / .git）..."
 
 cd "$SCRIPT_DIR"
 tar -czf "$ARCHIVE" \
+  $TAR_META_FLAGS \
   --exclude='node_modules' \
   --exclude='.git' \
   --exclude='data/mongodb' \

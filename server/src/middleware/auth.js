@@ -7,13 +7,14 @@
 
 const jwt = require('jsonwebtoken');
 const config = require('../config/env');
-const { normalizeClientId } = require('../utils/helpers');
+const { normalizeClientId, hashValue, getClientIp } = require('../utils/helpers');
 
 /**
  * Express 鉴权中间件
- * 支持两种鉴权方式：
+ * 支持三种鉴权方式：
  * 1. JWT Bearer token（本地签发验证）
  * 2. 旧版 Query Token（兼容过渡期）
+ * 3. 匿名回退 — 基于 client_id/IP 生成确定性身份
  *
  * 成功时将 identity 信息挂到 req.identity
  */
@@ -40,8 +41,10 @@ function authMiddleware(req, res, next) {
     return next();
   }
 
-  // 无有效身份
-  req.identity = { ok: false };
+  // 3. 匿名回退 — 基于 client_id 或 IP 生成确定性匿名身份
+  const anonClientId = normalizeClientId(req.body?._cid || req.body?.client_id || req.query?.client_id || '');
+  const anonSource = anonClientId || getClientIp(req);
+  req.identity = { ok: true, kind: 'anonymous', subjectId: `anon:${hashValue(anonSource, config.ipHashSalt)}` };
   return next();
 }
 

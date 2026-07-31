@@ -37,7 +37,8 @@ async function syncSchedule() {
       return result;
     }
     const schedule = JSON.parse(scheduleRaw);
-    const matches = schedule.matches || [];
+    const data = schedule.data || schedule;
+    const matches = data.matches || [];
     result.matches = matches.length;
 
     if (matches.length === 0) {
@@ -47,13 +48,13 @@ async function syncSchedule() {
       return result;
     }
 
-    const seasonName = schedule.season_name || season;
+    const seasonName = data.season_name || season;
     for (const m of matches) { if (!m.season_name) m.season_name = seasonName; }
 
-    const sourceFetchedAt = schedule.updated_at || new Date().toISOString();
+    const sourceFetchedAt = data.updated_at || new Date().toISOString();
     const mergeResult = await mergeScheduleMatches(season, matches, {
       isFullSync: true, isLive: false, sourceFetchedAt,
-      sourceStatus: schedule.source_status || 'ok', maxRetries: 3,
+      sourceStatus: data.source_status || 'ok', maxRetries: 3,
     });
 
     result.status = mergeResult.action === 'skipped' ? 'skipped' : mergeResult.action === 'no_change' ? 'no_change' : 'success';

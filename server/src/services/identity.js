@@ -6,11 +6,12 @@
  * 三级鉴权链：
  * 1. JWT Bearer token（本地签发验证）
  * 2. 旧版 Query Token（兼容过渡期）
+ * 3. 匿名回退 — 基于 client_id/IP 生成确定性身份（替代 CloudBase 匿名登录）
  */
 
 const jwt = require('jsonwebtoken');
 const config = require('../config/env');
-const { hashValue, normalizeClientId } = require('../utils/helpers');
+const { hashValue, normalizeClientId, getClientIp } = require('../utils/helpers');
 
 /**
  * 从 Express 请求中解析用户身份
@@ -38,7 +39,11 @@ async function resolveIdentity(req) {
     return { ok: true, kind: 'legacy', subjectId: `legacy:${normalizeClientId(legacyId)}` };
   }
 
-  return { ok: false };
+  // 3. 匿名回退 — 基于 client_id 或 IP 生成确定性匿名身份
+  // 替代原 CloudBase signInAnonymously，无需前端改动
+  const anonClientId = normalizeClientId(req.body?._cid || req.body?.client_id || req.query?.client_id || '');
+  const anonSource = anonClientId || getClientIp(req);
+  return { ok: true, kind: 'anonymous', subjectId: `anon:${hashValue(anonSource, config.ipHashSalt)}` };
 }
 
 function getBearerToken(req) {
