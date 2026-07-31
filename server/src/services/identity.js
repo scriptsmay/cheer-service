@@ -24,7 +24,7 @@ async function resolveIdentity(req) {
     try {
       const payload = jwt.verify(bearer, config.jwtSecret);
       if (payload.sub) {
-        return { ok: true, kind: 'session', subjectId: payload.sub };
+        return { ok: true, kind: 'session', subjectId: payload.sub, username: payload.username || '' };
       }
     } catch (_) {
       /* invalid token, fall through */

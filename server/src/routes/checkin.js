@@ -34,13 +34,12 @@ router.get('/stats', async (req, res) => {
   }
 });
 
-// GET /me — 当前用户打卡摘要
+// GET /me — 当前用户打卡摘要（仅限登录会话，拒绝匿名/legacy）
 router.get('/me', async (req, res) => {
   const requestId = getRequestId(req);
   const identity = await resolveIdentity(req);
-  if (!identity.ok) return errorResponse(res, 401, 'SESSION_REQUIRED', '匿名会话无效或已过期', requestId);
-  if (identity.kind !== 'session' && !identity.subjectId.startsWith('legacy:')) {
-    return errorResponse(res, 401, 'SESSION_REQUIRED', '打卡需要有效会话', requestId);
+  if (identity.kind !== 'session') {
+    return errorResponse(res, 401, 'LOGIN_REQUIRED', '登录后查看打卡记录', requestId);
   }
 
   try {
@@ -51,11 +50,13 @@ router.get('/me', async (req, res) => {
   }
 });
 
-// GET /me/report — 今日加油卡 AI 报告
+// GET /me/report — 今日加油卡 AI 报告（仅限登录会话）
 router.get('/me/report', async (req, res) => {
   const requestId = getRequestId(req);
   const identity = await resolveIdentity(req);
-  if (!identity.ok) return errorResponse(res, 401, 'SESSION_REQUIRED', '匿名会话无效或已过期', requestId);
+  if (identity.kind !== 'session') {
+    return errorResponse(res, 401, 'LOGIN_REQUIRED', '登录后查看加油卡报告', requestId);
+  }
 
   try {
     const report = await getMyReport(identity.subjectId);
