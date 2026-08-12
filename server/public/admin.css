@@ -7,8 +7,22 @@ h1 { font-size: 22px; margin-bottom: 8px; }
 .card h2 { font-size: 16px; margin-bottom: 16px; color: #333; }
 .form-group { margin-bottom: 14px; }
 .form-group label { display: block; font-size: 13px; color: #666; margin-bottom: 4px; font-weight: 500; }
-.form-group input { width: 100%; padding: 10px 12px; border: 1px solid #dde; border-radius: 8px; font-size: 14px; font-family: monospace; background: #fafbfc; transition: border-color .2s; }
-.form-group input:focus { outline: none; border-color: #6366f1; background: #fff; }
+.form-group input:not([type="checkbox"]) { width: 100%; padding: 10px 12px; border: 1px solid #dde; border-radius: 8px; font-size: 14px; font-family: monospace; background: #fafbfc; transition: border-color .2s; }
+.form-group input:not([type="checkbox"]):focus { outline: none; border-color: #6366f1; background: #fff; }
+.form-group input[type="checkbox"] { width: auto; margin: 0; accent-color: #6366f1; cursor: pointer; }
+.form-group select { width: 100%; padding: 10px 12px; border: 1px solid #dde; border-radius: 8px; font-size: 14px; background: #fafbfc; cursor: pointer; }
+.form-group select:focus { outline: none; border-color: #6366f1; background: #fff; }
+/* 勾选项：checkbox 与文字同行，不继承 label 的 block 布局 */
+.form-group label.checkbox-label { display: flex; align-items: center; gap: 8px; margin-bottom: 0; color: #333; cursor: pointer; }
+.field-hint { font-size: 12px; color: #888; margin-top: 6px; }
+/* 数据模式单选卡 */
+.mode-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.mode-option { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px solid #e5e7eb; border-radius: 8px; cursor: pointer; transition: border-color .2s; }
+.mode-option:hover { border-color: #c7d2fe; }
+.mode-option.selected { border-color: #6366f1; background: #6366f108; }
+.mode-option input[type="radio"] { margin-top: 3px; accent-color: #6366f1; cursor: pointer; }
+.mode-option-title { font-size: 13px; font-weight: 600; }
+.mode-option-desc { font-size: 12px; color: #888; }
 .btn-row { display: flex; gap: 10px; margin-top: 18px; }
 .btn { padding: 10px 24px; border-radius: 8px; border: none; font-size: 14px; font-weight: 500; cursor: pointer; transition: all .2s; }
 .btn-primary { background: #6366f1; color: #fff; }

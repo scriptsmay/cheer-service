@@ -291,14 +291,16 @@ async function refreshCheerMode() {
     career: '注入「生涯」汇总数据，并禁止前瞻性赛程表述（适用于选手缺赛期）',
     emotion: '不注入任何数据，生成纯情绪应援文案',
   };
-  box.innerHTML = (d.options || []).map((opt) =>
-    '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;border:1px solid '
-    + (opt.value === d.data_mode ? '#6366f1' : '#e5e7eb') + ';border-radius:6px">'
-    + '<input type="radio" name="cheerMode" value="' + opt.value + '"' + (opt.value === d.data_mode ? ' checked' : '') + ' style="margin-top:2px">'
-    + '<span><b style="font-size:13px">' + opt.label + '</b><br>'
-    + '<span style="font-size:12px;color:#888">' + (descs[opt.value] || '') + '</span></span>'
-    + '</label>'
-  ).join('');
+  box.innerHTML = (d.options || []).map((opt) => {
+    const selected = opt.value === d.data_mode ? ' selected' : '';
+    const checked = opt.value === d.data_mode ? ' checked' : '';
+    const desc = descs[opt.value] || '';
+    return '<label class="mode-option' + selected + '">'
+      + '<input type="radio" name="cheerMode" value="' + opt.value + '"' + checked + '>'
+      + '<span><b class="mode-option-title">' + opt.label + '</b><br>'
+      + '<span class="mode-option-desc">' + desc + '</span></span>'
+      + '</label>';
+  }).join('');
 
   box.querySelectorAll('input[name="cheerMode"]').forEach((el) => {
     el.addEventListener('change', () => saveCheerMode(el.value));
