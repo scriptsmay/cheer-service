@@ -12,6 +12,7 @@ const { generateText } = require('../services/ai');
 const { resolveIdentity } = require('../services/identity');
 const { successResponse, errorResponse } = require('../services/response');
 const { isContentBlocked } = require('../lib/ai-utils');
+const { getCheerDataMode } = require('../services/settings-store');
 const {
   getRequestId, getClientIp, shanghaiDate, normalizeClientId,
   isValidClientId, normalizeRequestId, hashValue, formatRate,
@@ -53,8 +54,9 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    const overview = await getLatestOverview();
-    const source = buildGroundedSource(overview);
+    const dataMode = await getCheerDataMode();
+    const overview = dataMode.mode === 'emotion' ? null : await getLatestOverview();
+    const source = buildGroundedSource(overview, dataMode.mode);
     const idempotencyKey = normalizeRequestId(req.headers?.['x-request-id'] || requestId);
     const quota = await consumeAiQuota({
       subjectId: identity.subjectId,
@@ -66,7 +68,7 @@ router.post('/', async (req, res) => {
     if (!quota.allowed) return errorResponse(res, 429, 'RATE_LIMITED', '今日应援生成额度已用完', requestId, 86400);
     if (quota.response) return successResponse(res, quota.response, requestId);
 
-    const generation = await generateValidatedOutput({ mood, text, source, requestId });
+    const generation = await generateValidatedOutput({ mood, text, source, requestId, mode: dataMode.mode });
     if (!generation.ok) {
       await markReceipt(quota.receiptId, 'failed');
       if (generation.failure.kind === 'blocked_content') {
@@ -96,6 +98,7 @@ router.post('/', async (req, res) => {
       report_id: reportId,
       module: 'aiCheer',
       status: 'active',
+      data_mode: dataMode.mode,
       subject_id: identity.subjectId,
       client_id_hash: hashValue(clientId, config.ipHashSalt),
       user_input: { mood, text_summary: text.slice(0, 40) },
@@ -119,11 +122,11 @@ router.post('/', async (req, res) => {
 
 // ── 内部函数 ──
 
-async function generateValidatedOutput({ mood, text, source, requestId }) {
+async function generateValidatedOutput({ mood, text, source, requestId, mode }) {
   let lastFailure = { kind: 'invalid_output', reason: 'not_generated' };
   for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt += 1) {
     const messages = [
-      { role: 'system', content: buildSystemPrompt(mood, source) },
+      { role: 'system', content: buildSystemPrompt(mood, source, mode) },
       { role: 'user', content: buildUserPrompt(mood, text, source) },
     ];
     if (attempt > 1) messages.push({ role: 'user', content: buildRetryInstruction(lastFailure) });
@@ -153,12 +156,18 @@ async function getLatestOverview() {
   return result.data && result.data.length ? result.data[0] : null;
 }
 
-function buildGroundedSource(overview) {
+function buildGroundedSource(overview, mode = 'season') {
+  if (mode === 'emotion') return { refs: [], snapshotAt: '', promptLines: [] };
   if (!overview) return { refs: [], snapshotAt: '', promptLines: [] };
   const envelope = isObject(overview.data) ? overview.data : {};
   const data = isObject(envelope.data) ? envelope.data : envelope;
   const seasonId = typeof overview.season === 'string' ? overview.season : '';
-  const seasonStats = Array.isArray(data.season_stats) ? data.season_stats.find((item) => isObject(item) && item.season_id === seasonId) : null;
+  // career 模式强制走生涯汇总，忽略"当前赛季"口径（选手缺赛期数据已冻结）
+  const seasonStats = mode === 'career'
+    ? null
+    : (Array.isArray(data.season_stats)
+      ? data.season_stats.find((item) => isObject(item) && item.season_id === seasonId)
+      : null);
   const career = isObject(data.career_summary) ? data.career_summary : {};
   const stats = seasonStats || career;
   const statsLabel = seasonStats ? '当前赛季' : '生涯';
@@ -170,11 +179,22 @@ function buildGroundedSource(overview) {
   addRef(refs, `${statsLabel}对局数`, stats.battles ?? stats.total_battles, 'season_summaries');
   addRef(refs, `${statsLabel} MVP 次数`, stats.mvp ?? stats.mvp_count, 'season_summaries');
   addRef(refs, `${statsLabel}场均助攻`, stats.avg_assists, 'season_summaries');
+  const heroLabel = '常用英雄（按出场数）';
   const heroSummary = heroes.filter((item) => isObject(item) && typeof item.hero_name === 'string' && item.hero_name).slice(0, 5).map(formatHeroSummary).join('、');
-  addRef(refs, '常用英雄（按出场数）', heroSummary, 'season_summaries');
+  addRef(refs, heroLabel, heroSummary, 'season_summaries');
   // 只保留前 6 条数据，避免 prompt 太长
   const trimmedRefs = refs.slice(0, 6);
-  return { refs: trimmedRefs, promptLines: trimmedRefs.map((r) => `${r.label}：${r.value}`), snapshotAt: normalizeSnapshotAt(overview.updated_at || overview.source_snapshot_at) };
+  // career 口径下 overview.updated_at 只代表 season_summaries 文档刷新时间，
+  // 不等于生涯数据的截止时间，改用 career_summary 自带时间，没有则留空避免误导
+  const rawSnapshotAt = seasonStats
+    ? (overview.updated_at || overview.source_snapshot_at)
+    : (career.updated_at || career.snapshot_at || '');
+  return {
+    refs: trimmedRefs,
+    promptLines: trimmedRefs.map((r) => `${r.label}：${r.value}`),
+    snapshotAt: normalizeSnapshotAt(rawSnapshotAt),
+    statsScope: seasonStats ? 'season' : 'career',
+  };
 }
 
 function addRef(refs, label, value, source) {
@@ -215,13 +235,29 @@ const DEFAULT_PROMPT = `
 - 热爱不会缺席，放开手去拼！
 `;
 
-function buildSystemPrompt(mood, source) {
-  return [
-    DEFAULT_PROMPT,
-    `语气：${MOOD_PROMPTS[mood]}`,
-    `可引用数据：${source.promptLines.length ? source.promptLines.join('；') : '无，生成纯情绪应援文案'}`,
-    '只输出合法 JSON，lines 必须恰好包含 3 个字符串：{"lines":["文案1","文案2","文案3"],"emoji_caption":"配文"}',
-  ].join('\n');
+// 缺赛期语气变体（去掉前瞻性赛程表述）
+const MOOD_PROMPTS_OFFSEASON = {
+  victory: MOOD_PROMPTS.victory,
+  low: MOOD_PROMPTS.low,
+  daily: MOOD_PROMPTS.daily,
+  hope: '热血坚定，把这份能量化作长期陪伴与信任，气势不能输',
+};
+
+// 缺赛期约束：选手不参与后续赛程时，禁止前瞻性赛程表述
+const OFFSEASON_CONSTRAINT = `
+当前选手处于缺赛期，不参与后续赛程。禁止使用"下一场""接下来的比赛""本赛季赛程""下轮""复出之战"等指向具体未来对局的表述，也不得暗示比赛结果。
+可以回望已有的生涯高光、表达陪伴与长期期待，语气保持自然，不要把缺赛写成悲情叙事。
+`;
+
+function buildSystemPrompt(mood, source, mode = 'season') {
+  const isOffseason = mode === 'career' || mode === 'emotion';
+  const moodPrompts = isOffseason ? MOOD_PROMPTS_OFFSEASON : MOOD_PROMPTS;
+  const parts = [DEFAULT_PROMPT];
+  if (isOffseason) parts.push(OFFSEASON_CONSTRAINT);
+  parts.push(`语气：${moodPrompts[mood]}`);
+  parts.push(`可引用数据：${source.promptLines.length ? source.promptLines.join('；') : '无，生成纯情绪应援文案'}`);
+  parts.push('只输出合法 JSON，lines 必须恰好包含 3 个字符串：{"lines":["文案1","文案2","文案3"],"emoji_caption":"配文"}');
+  return parts.join('\n');
 }
 
 function buildUserPrompt(mood, text, source) {

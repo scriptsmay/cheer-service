@@ -73,6 +73,51 @@
     <!-- 测试结果 -->
     <div id="testResult"></div>
 
+    <!-- 应援文案数据模式 -->
+    <div class="card">
+      <h2>💬 应援文案数据模式 <span id="cheerModeSourceBadge" class="badge badge-env"></span></h2>
+      <p style="font-size:13px;color:#666;margin-bottom:12px">控制 <code>/api/cheer</code> 生成文案时注入哪些数据。修改后下一次生成立即生效。</p>
+      <div id="cheerModeOptions" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">
+        <div style="font-size:12px;color:#888">⏳ 加载中...</div>
+      </div>
+      <div id="cheerModeResult"></div>
+    </div>
+
+    <!-- 定时任务配置 -->
+    <div class="card">
+      <h2>⏰ 定时任务配置 <span id="schedulerSourceBadge" class="badge badge-env"></span></h2>
+      <p style="font-size:13px;color:#666;margin-bottom:12px">调整采集频率和周报任务开关。保存后 cron 变更立即重建任务，无需重启容器。</p>
+
+      <div class="form-group">
+        <label>KPL 采集频率</label>
+        <select id="crawlPreset" onchange="onCrawlPresetChange()" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:14px">
+          <option value="0 9 * * *">每天 1 次（09:00）</option>
+          <option value="0 9,21 * * *">每天 2 次（09:00 / 21:00）</option>
+          <option value="0 3,9,15,21 * * *">每 6 小时 1 次（03/09/15/21）</option>
+          <option value="custom">自定义 cron</option>
+        </select>
+      </div>
+      <div class="form-group" id="crawlCustomGroup" style="display:none">
+        <label>自定义 cron（5 段：分 时 日 月 周）</label>
+        <input id="crawlCustomCron" placeholder="例如：0 9 * * *" style="font-family:monospace">
+      </div>
+
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:8px">
+          <input id="weeklyStoryEnabled" type="checkbox">
+          <span>启用周报任务（每周一 05:00）</span>
+        </label>
+        <div style="font-size:12px;color:#888;margin-top:4px">缺赛期缺少周环比数据，建议关闭。</div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="saveSchedulerConfig()">💾 保存配置</button>
+        <button class="btn btn-outline" onclick="refreshSchedulerConfig()">↻ 重新加载</button>
+      </div>
+      <div id="schedulerResult"></div>
+      <div id="schedulerNextRun" style="margin-top:10px;font-size:12px;color:#16a34a"></div>
+    </div>
+
     <!-- 数据采集 -->
     <div class="card">
       <h2>📡 KPL 数据采集</h2>

@@ -42,6 +42,7 @@ const { getEffectiveConfig } = require(path.join(serverSrc, 'services', 'ai-conf
 const { textLength } = require(path.join(serverSrc, 'utils', 'helpers'));
 
 const ALLOWED_MOODS = new Set(['victory', 'low', 'daily', 'hope']);
+const ALLOWED_MODES = new Set(['season', 'career', 'emotion']);
 const TRACKED_TERMS = ['同担', '守护', '冲冲冲', '杀回来'];
 
 async function main() {
@@ -69,9 +70,14 @@ async function main() {
 
   // 加载赛季数据
   // 三种模式：--data-file（本地文件）> --no-data（纯情绪）> 默认（MongoDB）
+  // --mode 覆盖数据注入口径：season（默认）| career（生涯）| emotion（纯情绪）
+  const dataMode = options.mode || (options.useData || options.dataFile ? 'season' : 'emotion');
+  console.log(`数据模式：${dataMode}`);
   let overview = null;
   let needDbClose = false;
-  if (options.dataFile) {
+  if (dataMode === 'emotion') {
+    // 纯情绪模式：跳过数据加载
+  } else if (options.dataFile) {
     const raw = fs.readFileSync(options.dataFile, 'utf8');
     overview = JSON.parse(raw);
     console.log(`数据来源：本地文件 ${options.dataFile}`);
@@ -82,11 +88,11 @@ async function main() {
     needDbClose = true;
     if (needDbClose) await closeDb();
   }
-  const source = buildGroundedSource(overview);
+  const source = buildGroundedSource(overview, dataMode);
   console.log(`可引用数据：${source.promptLines.length ? source.promptLines.join('；') : '无（纯情绪模式）'}`);
 
   if (options.showPrompt) {
-    const sysPrompt = buildSystemPrompt(options.mood, source);
+    const sysPrompt = buildSystemPrompt(options.mood, source, dataMode);
     const usrPrompt = buildUserPrompt(options.mood, options.text, source);
     console.log('\n── 系统提示词 ──\n');
     console.log(sysPrompt);
@@ -104,7 +110,7 @@ async function main() {
 
   for (let index = 1; index <= options.count; index += 1) {
     const messages = [
-      { role: 'system', content: buildSystemPrompt(options.mood, source) },
+      { role: 'system', content: buildSystemPrompt(options.mood, source, dataMode) },
       { role: 'user', content: buildUserPrompt(options.mood, options.text, source) },
     ];
 
@@ -204,6 +210,7 @@ function parseArgs(args) {
     text: '',
     useData: true,
     dataFile: '',
+    mode: '',
     showPrompt: true,
     help: false,
     baseUrl: '',
@@ -220,6 +227,8 @@ function parseArgs(args) {
     } else if (arg === '--data-file') {
       options.dataFile = readOptionValue(args, ++index, '--data-file');
       options.useData = false; // --data-file 隐含不查 MongoDB
+    } else if (arg === '--mode') {
+      options.mode = readOptionValue(args, ++index, '--mode').toLowerCase();
     } else if (arg === '--no-prompt') {
       options.showPrompt = false;
     } else if (arg === '--show-prompt') {
@@ -243,6 +252,9 @@ function parseArgs(args) {
 
   if (!ALLOWED_MOODS.has(options.mood)) {
     throw new Error(`--mood 必须是 ${[...ALLOWED_MOODS].join('、')} 之一`);
+  }
+  if (options.mode && !ALLOWED_MODES.has(options.mode)) {
+    throw new Error(`--mode 必须是 ${[...ALLOWED_MODES].join('、')} 之一`);
   }
   if (!Number.isInteger(options.count) || options.count < 1 || options.count > 20) {
     throw new Error('--count 必须是 1 到 20 之间的整数');
@@ -281,6 +293,7 @@ function printHelp() {
   --text <text>      用户补充内容，最多 120 个字符
   --data-file <path> 从本地 JSON 文件读取赛季数据（无需 MongoDB）
   --no-data          不读取赛季数据，生成纯情绪文案
+  --mode <mode>      数据注入口径：season（当前赛季）| career（生涯，缺赛期）| emotion（纯情绪）
   --no-prompt        不输出提示词
   --show-prompt      输出实际发送给模型的提示词（默认开启）
   --base-url <url>   覆盖 AI API 地址

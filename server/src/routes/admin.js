@@ -14,6 +14,13 @@
 const express = require('express');
 const router = express.Router();
 const { getEffectiveConfig, saveConfig } = require('../services/ai-config');
+const {
+  getCheerDataMode,
+  setCheerDataMode,
+  CHEER_DATA_MODES,
+  getSchedulerSettings,
+  setSchedulerSettings,
+} = require('../services/settings-store');
 const { collection } = require('../db/mongo');
 const config = require('../config/env');
 const crypto = require('crypto');
@@ -23,7 +30,10 @@ let syncKplCrawl, syncData, syncSchedule;
 try { syncKplCrawl = require('../jobs/syncKplCrawl').syncKplCrawl; } catch (_) {}
 try { syncData = require('../jobs/syncData').syncData; } catch (_) {}
 try { syncSchedule = require('../jobs/syncSchedule').syncSchedule; } catch (_) {}
-const { getScheduleList } = require('../jobs/schedules');
+const { getScheduleList, getNextRun, assertValidCron } = require('../jobs/schedules');
+// 调度器热重载（cron 变更后立即重建任务）；在无调度器的环境下降级为不重建
+let rescheduleTask;
+try { rescheduleTask = require('../jobs/scheduler').rescheduleTask; } catch (_) {}
 
 // ── 鉴权守卫：硬拦截（仅允许 JWT 登录用户，拒绝匿名/旧版 Token）──
 function requireAuth(req, res, next) {
@@ -263,7 +273,7 @@ router.get('/sync/status', requireAuth, async (req, res) => {
         error: schedule.error || null,
       } : null,
       player_overview: playerOverview,
-      schedules: getScheduleList(true),
+      schedules: getScheduleList(true, { kpl_crawl: (await getSchedulerSettings()).kpl_crawl_cron }),
     });
   } catch (err) {
     console.error('[admin] sync status error:', err.message);
@@ -413,6 +423,114 @@ router.post('/ai/test', requireAuth, async (req, res) => {
     });
   } catch (err) {
     res.json({ ok: false, model: aiModel, error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════
+// 应援文案数据模式 / 定时任务配置（需登录，改完立即生效）
+// ═══════════════════════════════════════════════
+
+const CHEER_MODE_LABELS = {
+  season: '当前赛季数据',
+  career: '生涯数据（缺赛期）',
+  emotion: '纯情绪（不注入数据）',
+};
+
+// GET /api/admin/cheer/config — 查看应援文案数据模式
+router.get('/cheer/config', requireAuth, async (req, res) => {
+  try {
+    const { mode, source } = await getCheerDataMode();
+    res.json({
+      ok: true,
+      data_mode: mode,
+      data_mode_label: CHEER_MODE_LABELS[mode] || mode,
+      source,
+      options: CHEER_DATA_MODES.map((m) => ({ value: m, label: CHEER_MODE_LABELS[m] })),
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// PUT /api/admin/cheer/config — 更新应援文案数据模式
+router.put('/cheer/config', requireAuth, async (req, res) => {
+  const mode = typeof req.body?.data_mode === 'string' ? req.body.data_mode.toLowerCase() : '';
+  if (!CHEER_DATA_MODES.includes(mode)) {
+    return res.status(400).json({ ok: false, error: `data_mode 必须是 ${CHEER_DATA_MODES.join(' / ')}` });
+  }
+  try {
+    await setCheerDataMode(mode);
+    res.json({
+      ok: true,
+      data_mode: mode,
+      data_mode_label: CHEER_MODE_LABELS[mode],
+      message: '已保存，下一次文案生成立即生效',
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET /api/admin/scheduler/config — 查看定时任务配置
+router.get('/scheduler/config', requireAuth, async (req, res) => {
+  try {
+    const settings = await getSchedulerSettings();
+    res.json({
+      ok: true,
+      weekly_story_enabled: settings.weekly_story_enabled,
+      kpl_crawl_cron: settings.kpl_crawl_cron,
+      source: settings.source,
+      schedules: getScheduleList(true, { kpl_crawl: settings.kpl_crawl_cron }),
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// PUT /api/admin/scheduler/config — 更新定时任务配置（cron 变更立即重建任务）
+router.put('/scheduler/config', requireAuth, async (req, res) => {
+  const body = req.body || {};
+  const patch = {};
+
+  if (body.weekly_story_enabled !== undefined) {
+    if (typeof body.weekly_story_enabled !== 'boolean') {
+      return res.status(400).json({ ok: false, error: 'weekly_story_enabled 必须是布尔值' });
+    }
+    patch.weekly_story_enabled = body.weekly_story_enabled;
+  }
+
+  if (body.kpl_crawl_cron !== undefined) {
+    const cronExpr = typeof body.kpl_crawl_cron === 'string' ? body.kpl_crawl_cron.trim() : '';
+    if (!cronExpr) {
+      return res.status(400).json({ ok: false, error: 'kpl_crawl_cron 不能为空' });
+    }
+    // 先校验合法性，非法则不落库
+    try {
+      assertValidCron(cronExpr);
+    } catch (e) {
+      return res.status(400).json({ ok: false, error: `cron 表达式非法: ${e.message}` });
+    }
+    patch.kpl_crawl_cron = cronExpr;
+  }
+
+  if (!Object.keys(patch).length) {
+    return res.status(400).json({ ok: false, error: '至少提供一个字段: weekly_story_enabled, kpl_crawl_cron' });
+  }
+
+  try {
+    const saved = await setSchedulerSettings(patch);
+    // cron 变更后立即重建任务，无需重启容器
+    if (patch.kpl_crawl_cron && rescheduleTask) rescheduleTask('kpl_crawl', patch.kpl_crawl_cron);
+    res.json({
+      ok: true,
+      weekly_story_enabled: saved.weekly_story_enabled,
+      kpl_crawl_cron: saved.kpl_crawl_cron,
+      next_run: getNextRun(saved.kpl_crawl_cron),
+      message: '已保存并立即生效',
+    });
+  } catch (err) {
+    console.error('[admin] scheduler config update failed:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 

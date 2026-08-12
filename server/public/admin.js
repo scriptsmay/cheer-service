@@ -21,6 +21,8 @@ function showAdmin() {
   document.getElementById('adminPanel').classList.add('show');
   refresh();
   refreshSyncStatus();
+  refreshCheerMode();
+  refreshSchedulerConfig();
 }
 
 // ── 登录 ──
@@ -269,6 +271,112 @@ async function triggerCrawl() {
   btn.disabled = false;
   btn.innerHTML = '🔄 手动采集';
 }
+// ── 应援文案数据模式 ──
+let currentCheerMode = 'season';
+
+async function refreshCheerMode() {
+  const r = await api('GET', '/api/admin/cheer/config');
+  if (!r) return;
+  const d = await r.json();
+  if (!d.ok) return;
+  currentCheerMode = d.data_mode;
+
+  const badge = document.getElementById('cheerModeSourceBadge');
+  badge.textContent = d.source === 'db' ? '已自定义' : '环境变量默认';
+  badge.className = 'badge ' + (d.source === 'db' ? 'badge-file' : 'badge-env');
+
+  const box = document.getElementById('cheerModeOptions');
+  const descs = {
+    season: '注入「当前赛季」战绩（KDA、胜率、对局数、MVP、常用英雄）',
+    career: '注入「生涯」汇总数据，并禁止前瞻性赛程表述（适用于选手缺赛期）',
+    emotion: '不注入任何数据，生成纯情绪应援文案',
+  };
+  box.innerHTML = (d.options || []).map((opt) =>
+    '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;border:1px solid '
+    + (opt.value === d.data_mode ? '#6366f1' : '#e5e7eb') + ';border-radius:6px">'
+    + '<input type="radio" name="cheerMode" value="' + opt.value + '"' + (opt.value === d.data_mode ? ' checked' : '') + ' style="margin-top:2px">'
+    + '<span><b style="font-size:13px">' + opt.label + '</b><br>'
+    + '<span style="font-size:12px;color:#888">' + (descs[opt.value] || '') + '</span></span>'
+    + '</label>'
+  ).join('');
+
+  box.querySelectorAll('input[name="cheerMode"]').forEach((el) => {
+    el.addEventListener('change', () => saveCheerMode(el.value));
+  });
+}
+
+async function saveCheerMode(mode) {
+  if (mode === currentCheerMode) return;
+  const el = document.getElementById('cheerModeResult');
+  el.innerHTML = '<div class="result info"><span class="spinner"></span>保存中...</div>';
+  const r = await api('PUT', '/api/admin/cheer/config', { data_mode: mode });
+  if (!r) return;
+  const d = await r.json();
+  el.innerHTML = d.ok
+    ? '<div class="result success">✅ 已切换为「' + d.data_mode_label + '」，' + d.message + '</div>'
+    : '<div class="result error">❌ ' + (d.error || '保存失败') + '</div>';
+  refreshCheerMode();
+}
+
+// ── 定时任务配置 ──
+const CRAWL_PRESETS = ['0 9 * * *', '0 9,21 * * *', '0 3,9,15,21 * * *'];
+
+function onCrawlPresetChange() {
+  const val = document.getElementById('crawlPreset').value;
+  document.getElementById('crawlCustomGroup').style.display = val === 'custom' ? 'block' : 'none';
+}
+
+async function refreshSchedulerConfig() {
+  const r = await api('GET', '/api/admin/scheduler/config');
+  if (!r) return;
+  const d = await r.json();
+  if (!d.ok) return;
+
+  const badge = document.getElementById('schedulerSourceBadge');
+  badge.textContent = d.source === 'db' ? '已自定义' : '默认值';
+  badge.className = 'badge ' + (d.source === 'db' ? 'badge-file' : 'badge-env');
+
+  document.getElementById('weeklyStoryEnabled').checked = !!d.weekly_story_enabled;
+
+  const sel = document.getElementById('crawlPreset');
+  if (CRAWL_PRESETS.includes(d.kpl_crawl_cron)) {
+    sel.value = d.kpl_crawl_cron;
+    document.getElementById('crawlCustomGroup').style.display = 'none';
+  } else {
+    sel.value = 'custom';
+    document.getElementById('crawlCustomGroup').style.display = 'block';
+    document.getElementById('crawlCustomCron').value = d.kpl_crawl_cron;
+  }
+
+  const crawl = Array.isArray(d.schedules) ? d.schedules.find((s) => s.key === 'kpl_crawl') : null;
+  document.getElementById('schedulerNextRun').textContent =
+    crawl && crawl.next_run ? '采集任务下次执行: ' + formatTimeCST(crawl.next_run) : '';
+}
+
+async function saveSchedulerConfig() {
+  const body = { weekly_story_enabled: document.getElementById('weeklyStoryEnabled').checked };
+  const preset = document.getElementById('crawlPreset').value;
+  body.kpl_crawl_cron = preset === 'custom'
+    ? document.getElementById('crawlCustomCron').value.trim()
+    : preset;
+
+  const el = document.getElementById('schedulerResult');
+  if (!body.kpl_crawl_cron) { el.innerHTML = '<div class="result error">cron 不能为空</div>'; return; }
+  el.innerHTML = '<div class="result info"><span class="spinner"></span>保存中...</div>';
+
+  const r = await api('PUT', '/api/admin/scheduler/config', body);
+  if (!r) return;
+  const d = await r.json();
+  if (d.ok) {
+    el.innerHTML = '<div class="result success">✅ ' + d.message + '</div>';
+    document.getElementById('schedulerNextRun').textContent =
+      d.next_run ? '采集任务下次执行: ' + formatTimeCST(d.next_run) : '';
+    refreshSyncStatus();
+  } else {
+    el.innerHTML = '<div class="result error">❌ ' + (d.error || '保存失败') + '</div>';
+  }
+}
+
 (async function init() {
   const t = getToken();
   if (!t) { showLogin(); return; }

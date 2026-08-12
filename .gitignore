@@ -5,3 +5,4 @@ data/export/
 .env.deploy
 *.log
 .workbuddy/
+.DS_Store

@@ -90,8 +90,8 @@ async function start() {
     await getDb();
     console.log('[server] MongoDB connection established');
 
-    // 启动定时任务
-    startScheduler();
+    // 启动定时任务（读取 app_config 运行时配置，故为异步）
+    await startScheduler();
 
     // 启动 HTTP 服务
     app.listen(config.port, () => {

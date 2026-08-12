@@ -59,6 +59,12 @@ const config = {
   // 数据同步 API Key（push 模式，kpl-data-daily GitHub Actions 推送用）
   syncApiKey: process.env.SYNC_API_KEY || '',
 
+  // AI 文案数据模式：season | career | emotion（DB 优先，此为兜底默认）
+  cheerDataMode: (process.env.CHEER_DATA_MODE || 'season').toLowerCase(),
+
+  // weekly_story 定时任务默认开关（DB 优先，此为兜底默认）
+  weeklyStoryEnabled: process.env.WEEKLY_STORY_ENABLED !== 'false',
+
   // 服务端口
   port: parseInt(process.env.PORT || '3000', 10),
 };
