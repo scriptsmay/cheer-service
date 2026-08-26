@@ -15,11 +15,15 @@ const express = require('express');
 const router = express.Router();
 const { getEffectiveConfig, saveConfig } = require('../services/ai-config');
 const {
-  getCheerDataMode,
+  getCheerSettings,
+  setCheerSettings,
   setCheerDataMode,
   CHEER_DATA_MODES,
   getSchedulerSettings,
   setSchedulerSettings,
+  getCheerEvents,
+  setCheerEvent,
+  deleteCheerEvent,
 } = require('../services/settings-store');
 const { collection } = require('../db/mongo');
 const config = require('../config/env');
@@ -436,15 +440,18 @@ const CHEER_MODE_LABELS = {
   emotion: '纯情绪（不注入数据）',
 };
 
-// GET /api/admin/cheer/config — 查看应援文案数据模式
+// GET /api/admin/cheer/config — 查看应援文案数据模式 + 功能开关
 router.get('/cheer/config', requireAuth, async (req, res) => {
   try {
-    const { mode, source } = await getCheerDataMode();
+    const settings = await getCheerSettings();
     res.json({
       ok: true,
-      data_mode: mode,
-      data_mode_label: CHEER_MODE_LABELS[mode] || mode,
-      source,
+      data_mode: settings.mode,
+      data_mode_label: CHEER_MODE_LABELS[settings.mode] || settings.mode,
+      date_context_enabled: settings.date_context_enabled,
+      humanize_enabled: settings.humanize_enabled,
+      event_context_enabled: settings.event_context_enabled,
+      source: settings.source,
       options: CHEER_DATA_MODES.map((m) => ({ value: m, label: CHEER_MODE_LABELS[m] })),
     });
   } catch (err) {
@@ -452,22 +459,80 @@ router.get('/cheer/config', requireAuth, async (req, res) => {
   }
 });
 
-// PUT /api/admin/cheer/config — 更新应援文案数据模式
+// PUT /api/admin/cheer/config — 更新应援文案数据模式 / 功能开关
 router.put('/cheer/config', requireAuth, async (req, res) => {
-  const mode = typeof req.body?.data_mode === 'string' ? req.body.data_mode.toLowerCase() : '';
-  if (!CHEER_DATA_MODES.includes(mode)) {
-    return res.status(400).json({ ok: false, error: `data_mode 必须是 ${CHEER_DATA_MODES.join(' / ')}` });
+  const body = req.body || {};
+  const mode = typeof body.data_mode === 'string' ? body.data_mode.toLowerCase() : '';
+  const patch = {};
+
+  if (mode) {
+    if (!CHEER_DATA_MODES.includes(mode)) {
+      return res.status(400).json({ ok: false, error: `data_mode 必须是 ${CHEER_DATA_MODES.join(' / ')}` });
+    }
+    patch.data_mode = mode;
   }
+  for (const key of ['date_context_enabled', 'humanize_enabled', 'event_context_enabled']) {
+    if (typeof body[key] === 'boolean') patch[key] = body[key];
+  }
+  if (!Object.keys(patch).length) {
+    return res.status(400).json({ ok: false, error: '至少提供一个字段: data_mode 或三个开关之一' });
+  }
+
   try {
-    await setCheerDataMode(mode);
+    let saved;
+    if (patch.data_mode) {
+      await setCheerDataMode(patch.data_mode);
+      delete patch.data_mode;
+    }
+    if (Object.keys(patch).length) {
+      saved = await setCheerSettings(patch);
+    } else {
+      const settings = await getCheerSettings();
+      saved = settings;
+    }
     res.json({
       ok: true,
-      data_mode: mode,
-      data_mode_label: CHEER_MODE_LABELS[mode],
+      data_mode: saved.mode,
+      data_mode_label: CHEER_MODE_LABELS[saved.mode] || saved.mode,
+      date_context_enabled: saved.date_context_enabled,
+      humanize_enabled: saved.humanize_enabled,
+      event_context_enabled: saved.event_context_enabled,
       message: '已保存，下一次文案生成立即生效',
     });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── 应援事件管理（cheer_events 事件表 CRUD，需登录）──
+
+// GET /api/admin/cheer/events — 事件列表
+router.get('/cheer/events', requireAuth, async (req, res) => {
+  try {
+    const events = await getCheerEvents();
+    res.json({ ok: true, events });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// PUT /api/admin/cheer/events — 新增/更新事件（_id 幂等）
+router.put('/cheer/events', requireAuth, async (req, res) => {
+  try {
+    const saved = await setCheerEvent(req.body || {});
+    res.json({ ok: true, event: saved, message: '事件已保存，命中窗口内自动生效' });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+// DELETE /api/admin/cheer/events/:id — 删除事件
+router.delete('/cheer/events/:id', requireAuth, async (req, res) => {
+  try {
+    await deleteCheerEvent(req.params.id);
+    res.json({ ok: true, message: '事件已删除' });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
   }
 });
 

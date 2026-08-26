@@ -12,7 +12,8 @@ const { generateText } = require('../services/ai');
 const { resolveIdentity } = require('../services/identity');
 const { successResponse, errorResponse } = require('../services/response');
 const { isContentBlocked } = require('../lib/ai-utils');
-const { getCheerDataMode } = require('../services/settings-store');
+const { getCheerSettings, getActiveEventsForDate } = require('../services/settings-store');
+const { getDateContext } = require('../lib/date-context');
 const {
   getRequestId, getClientIp, shanghaiDate, normalizeClientId,
   isValidClientId, normalizeRequestId, hashValue, formatRate,
@@ -54,9 +55,36 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    const dataMode = await getCheerDataMode();
-    const overview = dataMode.mode === 'emotion' ? null : await getLatestOverview();
-    const source = buildGroundedSource(overview, dataMode.mode);
+    const settings = await getCheerSettings();
+    const dataMode = settings.mode;
+    const overview = dataMode === 'emotion' ? null : await getLatestOverview();
+    const source = buildGroundedSource(overview, dataMode);
+    const todayStr = shanghaiDate().date;
+
+    // ── 时间上下文 / 赛事事件 / 反 AI 味 组装（全部开关可控，线上可关）──
+    let eventHit = null;
+    let eventPhase = null;
+    if (settings.event_context_enabled !== false) {
+      const hits = await getActiveEventsForDate(todayStr);
+      if (hits.length) {
+        eventHit = hits[0];        // 主事件（剩余天数最近）
+        eventPhase = eventHit.phase;
+      }
+    }
+    let dateContext = null;
+    if (settings.date_context_enabled !== false) {
+      // 避开与昨天相同的赛事句式（查询失败不影响主流程）
+      const avoidText = await getLastEventText(identity.subjectId);
+      dateContext = getDateContext(todayStr, eventPhase, eventHit, avoidText);
+    }
+    const humanizeEnabled = settings.humanize_enabled !== false;
+
+    // 事件 refs 注入：仅倒数/临场/当天档进 refs（前端应援卡展示），预热档只在 prompt 轻提
+    if (eventPhase && eventPhase.phase !== 'preview' && eventHit) {
+      addRef(source.refs, eventHit.refs_label || '今日赛事', eventHit.refs_value || eventHit.title, 'cheer_events');
+      source.promptLines = source.refs.map((r) => `${r.label}：${r.value}`);
+    }
+
     const idempotencyKey = normalizeRequestId(req.headers?.['x-request-id'] || requestId);
     const quota = await consumeAiQuota({
       subjectId: identity.subjectId,
@@ -68,7 +96,8 @@ router.post('/', async (req, res) => {
     if (!quota.allowed) return errorResponse(res, 429, 'RATE_LIMITED', '今日应援生成额度已用完', requestId, 86400);
     if (quota.response) return successResponse(res, quota.response, requestId);
 
-    const generation = await generateValidatedOutput({ mood, text, source, requestId, mode: dataMode.mode });
+    const ctx = { dateContext, eventHit, humanizeEnabled };
+    const generation = await generateValidatedOutput({ mood, text, source, requestId, mode: dataMode, ctx });
     if (!generation.ok) {
       await markReceipt(quota.receiptId, 'failed');
       if (generation.failure.kind === 'blocked_content') {
@@ -94,11 +123,11 @@ router.post('/', async (req, res) => {
     };
 
     const aiReportsCol = await collection('ai_reports');
-    await aiReportsCol.doc(reportId).set({
+    const reportDoc = {
       report_id: reportId,
       module: 'aiCheer',
       status: 'active',
-      data_mode: dataMode.mode,
+      data_mode: dataMode,
       subject_id: identity.subjectId,
       client_id_hash: hashValue(clientId, config.ipHashSalt),
       user_input: { mood, text_summary: text.slice(0, 40) },
@@ -108,7 +137,20 @@ router.post('/', async (req, res) => {
       timestamp: now.getTime(),
       created_at: now.toISOString(),
       expires_at: new Date(now.getTime() + 30 * DAY_MS).toISOString(),
-    });
+    };
+    // 多样性追溯字段：时间上下文与事件命中明细
+    if (dateContext) {
+      reportDoc.date_context = {
+        date_label: dateContext.dateLabel,
+        anchors: dateContext.anchors, // [{kind,text}]
+      };
+    }
+    if (eventHit && eventPhase) {
+      reportDoc.event_hit = eventHit._id;
+      reportDoc.event_phase = eventPhase.phase;
+      reportDoc.event_days_until = eventPhase.daysUntil;
+    }
+    await aiReportsCol.doc(reportId).set(reportDoc);
 
     const usageCol = await collection('usage_limits');
     await usageCol.doc(quota.receiptId).update({ status: 'success', response: payload, updated_at: now.toISOString() });
@@ -122,11 +164,11 @@ router.post('/', async (req, res) => {
 
 // ── 内部函数 ──
 
-async function generateValidatedOutput({ mood, text, source, requestId, mode }) {
+async function generateValidatedOutput({ mood, text, source, requestId, mode, ctx }) {
   let lastFailure = { kind: 'invalid_output', reason: 'not_generated' };
   for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt += 1) {
     const messages = [
-      { role: 'system', content: buildSystemPrompt(mood, source, mode) },
+      { role: 'system', content: buildSystemPrompt(mood, source, mode, ctx) },
       { role: 'user', content: buildUserPrompt(mood, text, source) },
     ];
     if (attempt > 1) messages.push({ role: 'user', content: buildRetryInstruction(lastFailure) });
@@ -140,7 +182,9 @@ async function generateValidatedOutput({ mood, text, source, requestId, mode }) 
       continue;
     }
 
-    const validation = inspectGeneratedOutput(parseGeneratedText(result && result.text), source);
+    const validation = inspectGeneratedOutput(parseGeneratedText(result && result.text), source, {
+      humanize: !ctx || ctx.humanizeEnabled !== false,
+    });
     console.log('[ai-cheer] model completed', { requestId, attempt, totalTokens: result?.usage?.total_tokens });
     if (validation.ok) return { ok: true, output: validation.output };
 
@@ -249,11 +293,39 @@ const OFFSEASON_CONSTRAINT = `
 可以回望已有的生涯高光、表达陪伴与长期期待，语气保持自然，不要把缺赛写成悲情叙事。
 `;
 
-function buildSystemPrompt(mood, source, mode = 'season') {
+// 缺赛期约束·亚运豁免版：选手正在参加国家赛事时，KPL 禁令保留，但允许围绕亚运赛事应援
+// 事件命中时用它「正向替换」OFFSEASON_CONSTRAINT，避免模型收到矛盾指令
+const OFFSEASON_CONSTRAINT_ASIAN_GAMES = `
+当前选手处于缺赛期，不参与 KPL 后续赛程。禁止使用"下一场""接下来的比赛""本赛季赛程""下轮""复出之战"等指向 KPL 具体未来对局的表述，也不得暗示 KPL 比赛结果。
+但选手正在参加国家赛事（2026 名古屋亚运会），可以自然围绕亚运赛事应援，允许"亚运""金牌赛""为国出征"等表达；临近比赛日的赛事倒计时可以提及。
+可以回望已有的生涯高光、表达陪伴与长期期待，语气保持自然，不要把缺赛写成悲情叙事。
+`;
+
+// 反 AI 味指南：写入 system prompt 的「禁止清单」（可通过 cheer_settings.humanize_enabled 关闭）
+const HUMANIZE_GUIDE = `
+避免 AI 腔：禁止排比三连句式（"不只是…更是…"）、禁止连续感叹号（最多一个）、禁止抽象词堆叠（梦想/热爱/永远/信念 每词整次输出最多一次）、禁止三句同构（三条句式开头雷同）、禁止口号式收尾（每句都是正能量总结）。
+像粉丝真的在打字：有停顿、有细节、允许一点点随意，不要每句都像精心设计的金句。
+`;
+
+// 时间上下文注入提示（date_context_enabled 关闭时不出现）
+const DATE_CONTEXT_HINT = `
+可以自然地融入节气/节日氛围或今日赛事，但每条文案最多提及一次时间语境，不要为了塞日期破坏口语感，也不要写成天气预报或赛事播报。
+`;
+
+function buildSystemPrompt(mood, source, mode = 'season', ctx = {}) {
   const isOffseason = mode === 'career' || mode === 'emotion';
   const moodPrompts = isOffseason ? MOOD_PROMPTS_OFFSEASON : MOOD_PROMPTS;
   const parts = [DEFAULT_PROMPT];
-  if (isOffseason) parts.push(OFFSEASON_CONSTRAINT);
+  if (isOffseason) {
+    // 事件命中（国家赛事）时用「正向替换」的豁免版约束，保留 KPL 禁令但放行亚运表述
+    parts.push(ctx.eventHit ? OFFSEASON_CONSTRAINT_ASIAN_GAMES : OFFSEASON_CONSTRAINT);
+  }
+  if (ctx.humanizeEnabled !== false) parts.push(HUMANIZE_GUIDE);
+  if (ctx.dateContext) {
+    parts.push(
+      `今日背景：${ctx.dateContext.dateLabel}，${ctx.dateContext.anchors.map((a) => a.text).join('；')}\n${DATE_CONTEXT_HINT}`
+    );
+  }
   parts.push(`语气：${moodPrompts[mood]}`);
   parts.push(`可引用数据：${source.promptLines.length ? source.promptLines.join('；') : '无，生成纯情绪应援文案'}`);
   parts.push('只输出合法 JSON，lines 必须恰好包含 3 个字符串：{"lines":["文案1","文案2","文案3"],"emoji_caption":"配文"}');
@@ -282,7 +354,7 @@ function parseGeneratedText(text) {
   }
 }
 
-function inspectGeneratedOutput(output, source) {
+function inspectGeneratedOutput(output, source, opts = {}) {
   if (!output || !Array.isArray(output.lines) || output.lines.length !== 3) {
     return { ok: false, kind: 'invalid_output', reason: 'line_count' };
   }
@@ -299,11 +371,60 @@ function inspectGeneratedOutput(output, source) {
   if (unexpectedNumbers.length) {
     return { ok: false, kind: 'invalid_output', reason: 'ungrounded_number', unexpectedNumbers };
   }
+  // 反 AI 味量化校验（可关）：误伤不阻断服务，只触发重试
+  if (opts.humanize !== false) {
+    const ai = checkAiFlavor(output.lines);
+    if (ai) {
+      return { ok: false, kind: 'invalid_output', reason: 'ai_flavor', ai };
+    }
+  }
   const safeOutput = { lines: output.lines, emoji_caption: output.emoji_caption || '⭐️ 并肩前行，为无言加油！' };
   if (safeOutput.lines.some(isContentBlocked) || isContentBlocked(safeOutput.emoji_caption)) {
     return { ok: false, kind: 'blocked_content', reason: 'blocked_term' };
   }
   return { ok: true, output: safeOutput };
+}
+
+// ── 反 AI 味量化规则（humanize）──
+const ABSTRACT_TERMS = ['梦想', '热爱', '永远', '信念', '一定'];
+const PARALLEL_PATTERNS = [
+  /不只(是)?[^，。！!]{2,8}[，,]\s*更(是)?/u,
+  /既是[^，。！!]{2,10}[，,]\s*又是/u,
+  /没有[^，。！!]{2,10}[，,]\s*只有/u,
+];
+const LEADING_PUNCT = /^[\s"'“”‘’《〈「『\[【(:：]+/u;
+
+/** 返回首个命中的 AI 味规则，或 null */
+function checkAiFlavor(lines) {
+  const all = lines.join('\n');
+  // 1. 连续感叹号（半角/全角）
+  if (/!{2,}/u.test(all) || /！{2,}/u.test(all)) {
+    return { rule: 'double_exclamation', detail: '连续感叹号' };
+  }
+  // 2. 感叹号密度（3 条合计 > 3 个）
+  const exCount = (all.match(/!|！/gu) || []).length;
+  if (exCount > 3) {
+    return { rule: 'exclamation_density', detail: `感叹号共 ${exCount} 个` };
+  }
+  // 3. 句首雷同（3 条首个非标点字符任一组 ≥ 2）
+  const starts = lines.map((l) => l.replace(LEADING_PUNCT, '').slice(0, 1));
+  const seen = new Map();
+  for (const s of starts) {
+    if (!s) continue;
+    const n = (seen.get(s) || 0) + 1;
+    if (n >= 2) return { rule: 'same_opening', detail: `句首「${s}」出现 ${n} 次` };
+    seen.set(s, n);
+  }
+  // 4. 抽象词堆叠（不同抽象词命中 > 3）
+  const hitTerms = ABSTRACT_TERMS.filter((t) => all.includes(t));
+  if (hitTerms.length > 3) {
+    return { rule: 'abstract_terms', detail: `抽象词过多：${hitTerms.join('、')}` };
+  }
+  // 5. 排比三连句式
+  for (const re of PARALLEL_PATTERNS) {
+    if (re.test(all)) return { rule: 'parallel_pattern', detail: '排比句式' };
+  }
+  return null;
 }
 
 function buildRetryInstruction(failure) {
@@ -312,6 +433,10 @@ function buildRetryInstruction(failure) {
   }
   if (failure.reason === 'ungrounded_number') {
     return '上一次输出包含未提供的数据。请全部重新生成，只能使用"可引用数据"中的数字；不要解释，只输出指定 JSON。';
+  }
+  if (failure.reason === 'ai_flavor') {
+    const detail = (failure.ai && failure.ai.detail) || '句式雷同/口号化';
+    return `上一次文案有 AI 腔（${detail}）。请全部重新生成：拆散句式、减少感叹号、让三条文案的角度和开头都不一样、去掉口号式总结；不要解释，只输出指定 JSON。`;
   }
   if (failure.kind === 'blocked_content') {
     return '上一次输出未通过内容安全检查。请全部重新生成正常、积极的粉丝应援文案；不要解释，只输出指定 JSON。';
@@ -366,6 +491,36 @@ async function markReceipt(receiptId, status) {
   } catch (_) { }
 }
 
+// ── 昨日赛事句式记忆（避免连续两天注入同一句式，形成新的公式化）──
+const lastEventTextCache = new Map(); // subjectId -> { text, ts }
+const LAST_EVENT_TEXT_TTL_MS = 5 * 60 * 1000;
+
+async function getLastEventText(subjectId) {
+  try {
+    const cached = lastEventTextCache.get(subjectId);
+    if (cached && Date.now() - cached.ts < LAST_EVENT_TEXT_TTL_MS) return cached.text;
+    const col = await collection('ai_reports');
+    const result = await col
+      .where({ subject_id: subjectId, event_hit: { $exists: true } })
+      .orderBy('created_at', 'desc')
+      .limit(1)
+      .get();
+    const doc = result.data && result.data[0];
+    let text = null;
+    if (doc) {
+      const anchors = Array.isArray(doc.date_context)
+        ? doc.date_context
+        : (doc.date_context && Array.isArray(doc.date_context.anchors) ? doc.date_context.anchors : []);
+      const eventAnchor = anchors.find((a) => a && a.kind === 'event' && a.text);
+      if (eventAnchor) text = eventAnchor.text;
+    }
+    lastEventTextCache.set(subjectId, { text, ts: Date.now() });
+    return text;
+  } catch (_) {
+    return null; // DB 不可用/查询失败时跳过避重逻辑，不影响主流程
+  }
+}
+
 function readLimit(name, fallback) {
   const value = Number(process.env[name]);
   return Number.isInteger(value) && value > 0 ? value : fallback;
@@ -386,5 +541,6 @@ module.exports.__test = {
   buildUserPrompt,
   parseGeneratedText,
   inspectGeneratedOutput,
+  checkAiFlavor,
   getLatestOverview,
 };

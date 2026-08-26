@@ -81,7 +81,72 @@
       <div id="cheerModeOptions" class="mode-options">
         <div class="field-hint">⏳ 加载中...</div>
       </div>
+
+      <div style="margin-top:14px;padding:12px;background:#f8fafc;border-radius:8px">
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px">🎛 文案多样性开关</div>
+        <label class="checkbox-label" style="margin-bottom:6px">
+          <input id="dateCtxEnabled" type="checkbox" onchange="saveCheerSettings()">
+          <span>时间上下文（日期/节气/节日，命中才注入）</span>
+        </label>
+        <label class="checkbox-label" style="margin-bottom:6px">
+          <input id="humanizeEnabled" type="checkbox" onchange="saveCheerSettings()">
+          <span>反 AI 味校验（句式雷同/感叹号/口号化自动重生成）</span>
+        </label>
+        <label class="checkbox-label">
+          <input id="eventCtxEnabled" type="checkbox" onchange="saveCheerSettings()">
+          <span>赛事事件注入（亚运比赛日等，含赛前预告与倒数）</span>
+        </label>
+      </div>
       <div id="cheerModeResult"></div>
+    </div>
+
+    <!-- 应援事件管理 -->
+    <div class="card">
+      <h2>📅 应援事件管理 <span id="eventSourceBadge" class="badge badge-env">DB</span></h2>
+      <p class="field-hint" style="margin-bottom:12px">配置赛事/节日事件，支持赛前 N 天预告（leadDays）。命中窗口内自动注入文案与倒计时，无需发版。事件日过后删除或关闭即可。</p>
+      <div id="eventList">
+        <div class="field-hint">⏳ 加载中...</div>
+      </div>
+
+      <div style="margin-top:16px;padding:12px;background:#f8fafc;border-radius:8px">
+        <div style="font-size:13px;font-weight:600;margin-bottom:10px" id="eventFormTitle">➕ 新增事件</div>
+        <input type="hidden" id="evtId">
+        <div class="form-group">
+          <label>日期（事件日）</label>
+          <input id="evtDate" type="date" placeholder="2026-09-28">
+        </div>
+        <div class="form-group">
+          <label>标题</label>
+          <input id="evtTitle" placeholder="王者荣耀亚运金牌赛">
+        </div>
+        <div class="form-group">
+          <label>赛前 N 天预告（0 = 仅当天，默认 30）</label>
+          <input id="evtLeadDays" type="number" min="0" max="365" value="30">
+        </div>
+        <div class="form-group">
+          <label>类型</label>
+          <select id="evtType">
+            <option value="gold_medal">🏅 金牌赛</option>
+            <option value="match">⚔️ 比赛</option>
+            <option value="festival">🎉 节日</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>描述（可选）</label>
+          <input id="evtDesc" placeholder="名古屋亚运会王者荣耀淘汰赛+决赛，产生1金">
+        </div>
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input id="evtActive" type="checkbox" checked>
+            <span>启用</span>
+          </label>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-primary" onclick="saveEvent()">💾 保存事件</button>
+          <button class="btn btn-outline" onclick="resetEventForm()">清空表单</button>
+        </div>
+        <div id="eventResult"></div>
+      </div>
     </div>
 
     <!-- 定时任务配置 -->

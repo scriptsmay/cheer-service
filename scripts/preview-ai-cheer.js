@@ -10,6 +10,10 @@
  *   node scripts/preview-ai-cheer.js --mood daily --count 3
  *   node scripts/preview-ai-cheer.js --mood low --count 5 --text "最近有点低谷"
  *   node scripts/preview-ai-cheer.js --mood hope --count 3 --no-data
+ *   node scripts/preview-ai-cheer.js --mode career --date 2026-09-28        # 模拟亚运日（today 档）
+ *   node scripts/preview-ai-cheer.js --mode career --date 2026-08-29        # 模拟预热里程碑（T-30）
+ *   node scripts/preview-ai-cheer.js --events-file demo-events.json          # 本地事件文件（无需 DB）
+ *   node scripts/preview-ai-cheer.js --no-date-context --no-humanize         # 关闭增强，对照效果
  *
  * 可选覆盖 AI 配置（不指定则用 .env 或 ai-config.json）：
  *   --base-url https://api.deepseek.com/v1
@@ -32,6 +36,10 @@ const {
   inspectGeneratedOutput,
   getLatestOverview,
 } = cheerExports.__test || cheerExports;
+
+// ── 时间上下文 / 事件 ──
+const { getDateContext, resolveEventPhase } = require(path.join(serverSrc, 'lib', 'date-context'));
+const { shanghaiDate } = require(path.join(serverSrc, 'utils', 'helpers'));
 
 // ── 导入数据处理层 ──
 // mongo 模块延迟导入：--data-file 或 --no-data 模式下完全跳过数据库连接
@@ -91,8 +99,47 @@ async function main() {
   const source = buildGroundedSource(overview, dataMode);
   console.log(`可引用数据：${source.promptLines.length ? source.promptLines.join('；') : '无（纯情绪模式）'}`);
 
+  // ── 时间上下文 / 赛事事件（--date 模拟 + --events-file 本地事件，无 DB 也可用）──
+  const todayStr = options.date || shanghaiDate().date;
+  let eventHit = null;
+  let eventPhase = null;
+  if (options.eventContext) {
+    let hits = [];
+    if (options.eventsFile) {
+      const raw = JSON.parse(fs.readFileSync(options.eventsFile, 'utf8'));
+      const list = Array.isArray(raw) ? raw : (raw.events || []);
+      hits = list
+        .map((ev) => Object.assign({}, ev, { phase: resolveEventPhase(ev, todayStr) }))
+        .filter((h) => h.phase)
+        .sort((a, b) => a.phase.daysUntil - b.phase.daysUntil);
+    } else if (dataMode !== 'emotion' || options.date) {
+      // 需要 DB：读真实事件表（纯情绪且未指定 --date 时跳过，避免无谓连接）
+      try {
+        const { getActiveEventsForDate } = require(path.join(serverSrc, 'services', 'settings-store'));
+        hits = await getActiveEventsForDate(todayStr);
+        const { close: closeDb } = require(path.join(serverSrc, 'db', 'mongo'));
+        await closeDb();
+      } catch (e) {
+        console.warn(`（DB 事件表不可用，跳过事件注入：${e.message}）`);
+      }
+    }
+    if (hits.length) {
+      eventHit = hits[0];
+      eventPhase = eventHit.phase;
+    }
+  }
+  let dateContext = null;
+  if (options.dateContext) {
+    dateContext = getDateContext(todayStr, eventPhase, eventHit, null);
+  }
+  const ctx = { dateContext, eventHit, humanizeEnabled: options.humanize };
+
+  if (options.date) console.log(`模拟日期：${todayStr}`);
+  if (eventHit) console.log(`命中事件：${eventHit.title}（${eventPhase.phase}，剩 ${eventPhase.daysUntil} 天）`);
+  if (dateContext) console.log(`时间上下文：${dateContext.dateLabel}，${dateContext.anchors.map((a) => a.text).join('；')}`);
+
   if (options.showPrompt) {
-    const sysPrompt = buildSystemPrompt(options.mood, source, dataMode);
+    const sysPrompt = buildSystemPrompt(options.mood, source, dataMode, ctx);
     const usrPrompt = buildUserPrompt(options.mood, options.text, source);
     console.log('\n── 系统提示词 ──\n');
     console.log(sysPrompt);
@@ -110,7 +157,7 @@ async function main() {
 
   for (let index = 1; index <= options.count; index += 1) {
     const messages = [
-      { role: 'system', content: buildSystemPrompt(options.mood, source, dataMode) },
+      { role: 'system', content: buildSystemPrompt(options.mood, source, dataMode, ctx) },
       { role: 'user', content: buildUserPrompt(options.mood, options.text, source) },
     ];
 
@@ -136,7 +183,7 @@ async function main() {
       continue;
     }
 
-    const validation = inspectGeneratedOutput(parsed, source);
+    const validation = inspectGeneratedOutput(parsed, source, { humanize: options.humanize });
     if (!validation.ok) {
       console.log(`\n[${options.mood} ${index}] ❌ 校验未通过 (${validation.reason})`);
       console.log(`原始输出：${JSON.stringify(parsed, null, 2)}`);
@@ -216,6 +263,11 @@ function parseArgs(args) {
     baseUrl: '',
     apiKey: '',
     model: '',
+    date: '',
+    eventsFile: '',
+    dateContext: true,
+    humanize: true,
+    eventContext: true,
   };
 
   for (let index = 0; index < args.length; index += 1) {
@@ -239,6 +291,16 @@ function parseArgs(args) {
       options.count = Number(readOptionValue(args, ++index, '--count'));
     } else if (arg === '--text') {
       options.text = readOptionValue(args, ++index, '--text');
+    } else if (arg === '--date') {
+      options.date = readOptionValue(args, ++index, '--date');
+    } else if (arg === '--events-file') {
+      options.eventsFile = readOptionValue(args, ++index, '--events-file');
+    } else if (arg === '--no-date-context') {
+      options.dateContext = false;
+    } else if (arg === '--no-humanize') {
+      options.humanize = false;
+    } else if (arg === '--no-events') {
+      options.eventContext = false;
     } else if (arg === '--base-url') {
       options.baseUrl = readOptionValue(args, ++index, '--base-url');
     } else if (arg === '--api-key') {
@@ -255,6 +317,9 @@ function parseArgs(args) {
   }
   if (options.mode && !ALLOWED_MODES.has(options.mode)) {
     throw new Error(`--mode 必须是 ${[...ALLOWED_MODES].join('、')} 之一`);
+  }
+  if (options.date && !/^\d{4}-\d{2}-\d{2}$/.test(options.date)) {
+    throw new Error('--date 必须是 YYYY-MM-DD 格式');
   }
   if (!Number.isInteger(options.count) || options.count < 1 || options.count > 20) {
     throw new Error('--count 必须是 1 到 20 之间的整数');
@@ -294,6 +359,11 @@ function printHelp() {
   --data-file <path> 从本地 JSON 文件读取赛季数据（无需 MongoDB）
   --no-data          不读取赛季数据，生成纯情绪文案
   --mode <mode>      数据注入口径：season（当前赛季）| career（生涯，缺赛期）| emotion（纯情绪）
+  --date <YYYY-MM-DD>  模拟指定日期（时间上下文与赛事事件按该日命中）
+  --events-file <path> 从本地 JSON 加载事件（[{date,title,leadDays,...}]），无需 MongoDB
+  --no-date-context  关闭时间上下文注入（对照效果）
+  --no-humanize      关闭反 AI 味校验（对照效果）
+  --no-events        跳过赛事事件注入
   --no-prompt        不输出提示词
   --show-prompt      输出实际发送给模型的提示词（默认开启）
   --base-url <url>   覆盖 AI API 地址
@@ -305,6 +375,10 @@ function printHelp() {
   node --env-file=.env scripts/preview-ai-cheer.js --mood victory --count 3
   node --env-file=.env scripts/preview-ai-cheer.js --mood low --text "有点低迷" --count 5
   node --env-file=.env scripts/preview-ai-cheer.js --mood hope --count 3 --no-data
+  node --env-file=.env scripts/preview-ai-cheer.js --mode career --date 2026-09-28 --count 3
+  node --env-file=.env scripts/preview-ai-cheer.js --mode career --date 2026-08-29 --count 3
+  node --env-file=.env scripts/preview-ai-cheer.js --mode career --date 2026-09-21 --events-file demo-events.json
+  node --env-file=.env scripts/preview-ai-cheer.js --mode career --no-date-context --no-humanize --count 3
   node --env-file=.env scripts/preview-ai-cheer.js --mood daily --data-file ../kpl_data_daily/data/derived/KPL2026S2/overview.json
   node --env-file=.env scripts/preview-ai-cheer.js --mood daily --base-url https://api.deepseek.com/v1 --api-key sk-xxx --model deepseek-chat`);
 }

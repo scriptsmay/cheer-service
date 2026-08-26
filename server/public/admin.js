@@ -23,6 +23,7 @@ function showAdmin() {
   refreshSyncStatus();
   refreshCheerMode();
   refreshSchedulerConfig();
+  refreshEvents();
 }
 
 // ── 登录 ──
@@ -285,6 +286,11 @@ async function refreshCheerMode() {
   badge.textContent = d.source === 'db' ? '已自定义' : '环境变量默认';
   badge.className = 'badge ' + (d.source === 'db' ? 'badge-file' : 'badge-env');
 
+  // 三个多样性开关
+  document.getElementById('dateCtxEnabled').checked = d.date_context_enabled !== false;
+  document.getElementById('humanizeEnabled').checked = d.humanize_enabled !== false;
+  document.getElementById('eventCtxEnabled').checked = d.event_context_enabled !== false;
+
   const box = document.getElementById('cheerModeOptions');
   const descs = {
     season: '注入「当前赛季」战绩（KDA、胜率、对局数、MVP、常用英雄）',
@@ -305,6 +311,27 @@ async function refreshCheerMode() {
   box.querySelectorAll('input[name="cheerMode"]').forEach((el) => {
     el.addEventListener('change', () => saveCheerMode(el.value));
   });
+}
+
+// ── 保存多样性开关（数据模式保持不变）──
+let cheerSwitchSaving = false;
+async function saveCheerSettings() {
+  if (cheerSwitchSaving) return;
+  cheerSwitchSaving = true;
+  const el = document.getElementById('cheerModeResult');
+  el.innerHTML = '<div class="result info"><span class="spinner"></span>保存中...</div>';
+  const r = await api('PUT', '/api/admin/cheer/config', {
+    date_context_enabled: document.getElementById('dateCtxEnabled').checked,
+    humanize_enabled: document.getElementById('humanizeEnabled').checked,
+    event_context_enabled: document.getElementById('eventCtxEnabled').checked,
+  });
+  if (!r) { cheerSwitchSaving = false; return; }
+  const d = await r.json();
+  el.innerHTML = d.ok
+    ? '<div class="result success">✅ ' + d.message + '</div>'
+    : '<div class="result error">❌ ' + (d.error || '保存失败') + '</div>';
+  setTimeout(() => { el.innerHTML = ''; }, 3000);
+  cheerSwitchSaving = false;
 }
 
 async function saveCheerMode(mode) {
@@ -377,6 +404,130 @@ async function saveSchedulerConfig() {
   } else {
     el.innerHTML = '<div class="result error">❌ ' + (d.error || '保存失败') + '</div>';
   }
+}
+
+// ── 应援事件管理 ──
+let eventBeingEdited = null;
+
+async function refreshEvents() {
+  const r = await api('GET', '/api/admin/cheer/events');
+  if (!r) return;
+  const d = await r.json();
+  const el = document.getElementById('eventList');
+  if (!d.ok) {
+    el.innerHTML = '<div class="result error" style="margin:0">❌ ' + (d.error || '加载失败') + '</div>';
+    return;
+  }
+  const events = d.events || [];
+  if (!events.length) {
+    el.innerHTML = '<div style="font-size:13px;color:#888">暂无事件。可添加「王者荣耀亚运金牌赛」（2026-09-28，leadDays 30）。</div>';
+    return;
+  }
+  const today = new Date();
+  const todayStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+
+  el.innerHTML = events.map((ev) => {
+    const daysUntil = diffDays(todayStr, ev.date);
+    const inWindow = ev.active !== false && daysUntil >= 0 && daysUntil <= (ev.leadDays ?? 30);
+    const status = !ev.active ? '<span class="badge" style="background:#e5e7eb;color:#6b7280">已停用</span>'
+      : inWindow ? '<span class="badge" style="background:#dcfce7;color:#166534">命中中 · 剩 ' + daysUntil + ' 天</span>'
+      : daysUntil < 0 ? '<span class="badge" style="background:#f3f4f6;color:#9ca3af">已过期</span>'
+      : '<span class="badge" style="background:#e0e7ff;color:#3730a3">未开始 · ' + daysUntil + ' 天后</span>';
+    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #f1f5f9">'
+      + '<div>'
+      + '<div style="font-size:14px;font-weight:600">' + escapeHtml(ev.title)
+      + ' <span style="color:#888;font-weight:normal;font-size:12px">' + (ev.date || '-') + '</span></div>'
+      + '<div style="font-size:12px;color:#666;margin-top:2px">预告窗口: ' + (ev.leadDays ?? 30) + ' 天'
+      + ' · 类型: ' + (ev.type || 'match')
+      + (ev.description ? ' · ' + escapeHtml(ev.description) : '') + '</div>'
+      + '<div style="margin-top:4px">' + status + '</div>'
+      + '</div>'
+      + '<div class="btn-row" style="gap:6px">'
+      + '<button class="btn btn-outline" style="padding:4px 10px;font-size:12px" onclick="editEvent(' + JSON.stringify(ev._id) + ')">✏️ 编辑</button>'
+      + '<button class="btn btn-danger" style="padding:4px 10px;font-size:12px" onclick="deleteEvent(' + JSON.stringify(ev._id) + ')">🗑 删除</button>'
+      + '</div></div>';
+  }).join('');
+}
+
+function diffDays(a, b) {
+  const da = new Date(a + 'T00:00:00+08:00');
+  const db = new Date(b + 'T00:00:00+08:00');
+  return Math.round((db - da) / 86400000);
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+function fillEventForm(ev) {
+  document.getElementById('evtId').value = ev._id || '';
+  document.getElementById('evtDate').value = ev.date || '';
+  document.getElementById('evtTitle').value = ev.title || '';
+  document.getElementById('evtLeadDays').value = ev.leadDays ?? 30;
+  document.getElementById('evtType').value = ev.type || 'match';
+  document.getElementById('evtDesc').value = ev.description || '';
+  document.getElementById('evtActive').checked = ev.active !== false;
+  document.getElementById('eventFormTitle').textContent = ev._id ? '✏️ 编辑事件 #' + ev._id : '➕ 新增事件';
+}
+
+function editEvent(id) {
+  eventBeingEdited = id;
+  api('GET', '/api/admin/cheer/events').then(async (r) => {
+    if (!r) return;
+    const d = await r.json();
+    const ev = (d.events || []).find((e) => e._id === id);
+    if (ev) fillEventForm(ev);
+  });
+}
+
+function resetEventForm() {
+  eventBeingEdited = null;
+  fillEventForm({ leadDays: 30, type: 'match', active: true });
+  document.getElementById('eventResult').innerHTML = '';
+}
+
+async function saveEvent() {
+  const el = document.getElementById('eventResult');
+  const date = document.getElementById('evtDate').value.trim();
+  const title = document.getElementById('evtTitle').value.trim();
+  if (!date || !title) {
+    el.innerHTML = '<div class="result error">日期和标题必填</div>';
+    return;
+  }
+  const leadDays = Number(document.getElementById('evtLeadDays').value);
+  const body = {
+    _id: eventBeingEdited || document.getElementById('evtId').value || undefined,
+    date,
+    title,
+    leadDays: Number.isInteger(leadDays) && leadDays >= 0 ? leadDays : 30,
+    type: document.getElementById('evtType').value,
+    description: document.getElementById('evtDesc').value.trim(),
+    active: document.getElementById('evtActive').checked,
+  };
+  el.innerHTML = '<div class="result info"><span class="spinner"></span>保存中...</div>';
+  const r = await api('PUT', '/api/admin/cheer/events', body);
+  if (!r) return;
+  const d = await r.json();
+  el.innerHTML = d.ok
+    ? '<div class="result success">✅ ' + d.message + '</div>'
+    : '<div class="result error">❌ ' + (d.error || '保存失败') + '</div>';
+  if (d.ok) {
+    resetEventForm();
+    refreshEvents();
+  }
+}
+
+async function deleteEvent(id) {
+  if (!confirm('确认删除该事件？删除后立即失效。')) return;
+  const r = await api('DELETE', '/api/admin/cheer/events/' + encodeURIComponent(id));
+  if (!r) return;
+  const d = await r.json();
+  document.getElementById('eventResult').innerHTML = d.ok
+    ? '<div class="result success">✅ ' + d.message + '</div>'
+    : '<div class="result error">❌ ' + (d.error || '删除失败') + '</div>';
+  if (d.ok) { resetEventForm(); refreshEvents(); }
 }
 
 (async function init() {
