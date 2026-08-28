@@ -1,15 +1,12 @@
-const TOKEN_KEY = 'wuyan_admin_token';
+/* ============================================================
+ * admin.js — Wuyan Cheer 管理后台交互逻辑
+ * 通用工具（token / api / 时间格式化 / 转义 / statusBadge 等）
+ * 已抽到 admin-utils.js。本文件只保留各功能模块。
+ * ============================================================ */
+
 const API = '/api/admin/ai';
 
-function getToken() { return localStorage.getItem(TOKEN_KEY); }
-function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
-function clearToken() { localStorage.removeItem(TOKEN_KEY); }
-
-function authHeaders() {
-  const t = getToken();
-  return t ? { 'Authorization': 'Bearer ' + t, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
-}
-
+// ── 面板切换 ──
 function showLogin() {
   document.getElementById('loginPanel').classList.add('show');
   document.getElementById('adminPanel').classList.remove('show');
@@ -35,7 +32,7 @@ async function doLogin() {
   el.innerHTML = '<div class="result info"><span class="spinner"></span>登录中...</div>';
 
   try {
-    const r = await fetch('/api/auth/login', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({username:user,password:pass}) });
+    const r = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: user, password: pass }) });
     const d = await r.json();
     if (!r.ok || !d.data || !d.data.access_token) {
       el.innerHTML = '<div class="result error">❌ ' + (d.message || '登录失败') + '</div>';
@@ -44,13 +41,13 @@ async function doLogin() {
     setToken(d.data.access_token);
     el.innerHTML = '';
     showAdmin();
-  } catch(e) {
+  } catch (e) {
     el.innerHTML = '<div class="result error">❌ 网络错误: ' + e.message + '</div>';
   }
 }
 
 // 回车登录
-document.addEventListener('keydown', function(e) {
+document.addEventListener('keydown', function (e) {
   if (e.key === 'Enter' && document.getElementById('loginPanel').classList.contains('show')) {
     doLogin();
   }
@@ -60,16 +57,6 @@ document.addEventListener('keydown', function(e) {
 function doLogout() {
   clearToken();
   showLogin();
-}
-
-// ── API 封装（自动处理 401）──
-async function api(method, path, body) {
-  const headers = authHeaders();
-  const opts = { method, headers };
-  if (body) opts.body = JSON.stringify(body);
-  const r = await fetch(path, opts);
-  if (r.status === 401) { clearToken(); showLogin(); return null; }
-  return r;
 }
 
 // ── 刷新当前配置 ──
@@ -132,86 +119,50 @@ async function testAI() {
   }
 }
 
-// ── 格式化时间 ──
-function formatTime(isoStr) {
-  if (!isoStr) return '-';
-  try {
-    const d = new Date(isoStr);
-    const pad = (n) => String(n).padStart(2, '0');
-    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
-      + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
-  } catch { return isoStr; }
-}
-
-// ── 格式化时间（固定 Asia/Shanghai，不受浏览器时区影响）──
-function formatTimeCST(isoStr) {
-  if (!isoStr) return '-';
-  try {
-    return new Date(isoStr).toLocaleString('zh-CN', {
-      timeZone: 'Asia/Shanghai',
-      hour12: false,
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit',
-    });
-  } catch { return isoStr; }
-}
-
-// ── 状态徽章样式 ──
-function statusBadge(status) {
-  const map = {
-    success:   { bg: '#dcfce7', fg: '#166534', label: '成功' },
-    no_change: { bg: '#e0e7ff', fg: '#3730a3', label: '无变化' },
-    skipped:   { bg: '#fef3c7', fg: '#92400e', label: '跳过' },
-    error:     { bg: '#fecaca', fg: '#991b1b', label: '失败' },
-  };
-  const s = map[status] || { bg: '#e5e7eb', fg: '#374151', label: status || '未知' };
-  return '<span class="badge" style="background:' + s.bg + ';color:' + s.fg + '">' + s.label + '</span>';
-}
-
 // ── 刷新采集状态 ──
 async function refreshSyncStatus() {
   const el = document.getElementById('syncStatus');
-  el.innerHTML = '<div style="font-size:13px;color:#666">⏳ 加载中...</div>';
+  el.innerHTML = '<div class="loading">⏳ 加载中...</div>';
   try {
     const r = await api('GET', '/api/admin/sync/status');
     if (!r) return;
     const d = await r.json();
     if (!d.ok) {
-      el.innerHTML = '<div class="result error" style="margin:0">❌ ' + (d.error || '加载失败') + '</div>';
+      el.innerHTML = '<div class="result error result--flush">❌ ' + (d.error || '加载失败') + '</div>';
       return;
     }
 
     let html = '';
 
     if (d.last_daily_sync) {
-      html += '<div style="font-size:13px;margin-bottom:8px"><b>📊 单人数据:</b> '
+      html += '<div class="sync-block"><b>📊 单人数据:</b> '
         + statusBadge(d.last_daily_sync.status)
-        + ' <span style="color:#666">赛季: ' + (d.last_daily_sync.season || '-') + '</span><br>'
-        + '<span style="color:#888;font-size:12px">上次更新: ' + formatTime(d.last_daily_sync.updated_at) + '</span>'
-        + (d.last_daily_sync.error ? '<br><span style="color:#dc2626;font-size:12px">错误: ' + d.last_daily_sync.error + '</span>' : '')
+        + ' <span class="dim">赛季: ' + (d.last_daily_sync.season || '-') + '</span><br>'
+        + '<span class="muted-12">上次更新: ' + formatTime(d.last_daily_sync.updated_at) + '</span>'
+        + (d.last_daily_sync.error ? '<br><span class="text-error-12">错误: ' + d.last_daily_sync.error + '</span>' : '')
         + '</div>';
     } else {
-      html += '<div style="font-size:13px;margin-bottom:8px"><b>📊 单人数据:</b> <span style="color:#888">暂无记录</span></div>';
+      html += '<div class="sync-block"><b>📊 单人数据:</b> <span class="muted">暂无记录</span></div>';
     }
 
     if (d.last_schedule_sync) {
-      html += '<div style="font-size:13px;margin-bottom:8px"><b>📅 赛程数据:</b> '
+      html += '<div class="sync-block"><b>📅 赛程数据:</b> '
         + statusBadge(d.last_schedule_sync.status)
-        + ' <span style="color:#666">赛季: ' + (d.last_schedule_sync.season || '-') + '</span><br>'
-        + '<span style="color:#888;font-size:12px">上次更新: ' + formatTime(d.last_schedule_sync.updated_at) + '</span>'
-        + (d.last_schedule_sync.error ? '<br><span style="color:#dc2626;font-size:12px">错误: ' + d.last_schedule_sync.error + '</span>' : '')
+        + ' <span class="dim">赛季: ' + (d.last_schedule_sync.season || '-') + '</span><br>'
+        + '<span class="muted-12">上次更新: ' + formatTime(d.last_schedule_sync.updated_at) + '</span>'
+        + (d.last_schedule_sync.error ? '<br><span class="text-error-12">错误: ' + d.last_schedule_sync.error + '</span>' : '')
         + '</div>';
     } else {
-      html += '<div style="font-size:13px;margin-bottom:8px"><b>📅 赛程数据:</b> <span style="color:#888">暂无记录</span></div>';
+      html += '<div class="sync-block"><b>📅 赛程数据:</b> <span class="muted">暂无记录</span></div>';
     }
 
     if (d.player_overview) {
       const p = d.player_overview;
       const cs = p.current_season || {};
-      html += '<div style="margin-top:12px;padding-top:12px;border-top:1px solid #eee">'
-        + '<div style="font-size:13px;font-weight:600;margin-bottom:6px">👤 ' + (p.player_name || '-')
-        + ' <span style="color:#888;font-weight:normal">' + (p.team_name || '') + '</span></div>'
-        + '<div style="font-size:12px;color:#666;line-height:1.8">'
+      html += '<div class="overview">'
+        + '<div class="overview__name">👤 ' + (p.player_name || '-')
+        + ' <span class="muted">' + (p.team_name || '') + '</span></div>'
+        + '<div class="overview__meta">'
         + '赛季: ' + (p.season_name || p.season || '-') + '<br>'
         + '最后比赛: ' + (p.latest_match_time || '-') + '<br>'
         + '当前赛季: ' + (cs.battles || 0) + ' 场 / ' + (cs.wins || 0) + '胜' + (cs.loses || 0) + '负'
@@ -219,7 +170,7 @@ async function refreshSyncStatus() {
         + (cs.mvp ? ' / MVP: ' + cs.mvp : '')
         + (cs.kda_ratio ? ' / KDA: ' + cs.kda_ratio : '')
         + '<br>'
-        + '<span style="color:#888">数据入库时间: ' + formatTime(p.updated_at) + '</span>'
+        + '<span class="muted-12">数据入库时间: ' + formatTime(p.updated_at) + '</span>'
         + '</div></div>';
     }
 
@@ -232,20 +183,20 @@ async function refreshSyncStatus() {
       if (colls.length > 0) {
         let schHtml = '';
         for (const s of colls) {
-          schHtml += '<div style="font-size:12px;line-height:1.7;margin-bottom:8px">'
+          schHtml += '<div class="schedule-item">'
             + '<b>' + s.name + '</b> '
-            + '<span style="color:#6366f1;font-family:monospace;font-size:11px">' + s.cron + '</span><br>'
-            + '<span style="color:#888">' + s.description + '</span>'
-            + (s.next_run ? '<br><span style="color:#16a34a">下次执行: ' + formatTimeCST(s.next_run) + '</span>' : '')
+            + '<span class="cron-code">' + s.cron + '</span><br>'
+            + '<span class="dim-12">' + s.description + '</span>'
+            + (s.next_run ? '<br><span class="text-green-12">下次执行: ' + formatTimeCST(s.next_run) + '</span>' : '')
             + '</div>';
         }
         scheduleEl.innerHTML = schHtml;
       } else {
-        scheduleEl.innerHTML = '<span style="color:#888;font-size:12px">无采集任务</span>';
+        scheduleEl.innerHTML = '<span class="muted-12">无采集任务</span>';
       }
     }
   } catch (e) {
-    el.innerHTML = '<div class="result error" style="margin:0">❌ 网络错误: ' + e.message + '</div>';
+    el.innerHTML = '<div class="result error result--flush">❌ 网络错误: ' + e.message + '</div>';
   }
 }
 
@@ -266,12 +217,13 @@ async function triggerCrawl() {
     } else {
       el.innerHTML = '<div class="result error">❌ ' + (d.error || '触发失败') + '</div>';
     }
-  } catch(e) {
+  } catch (e) {
     el.innerHTML = '<div class="result error">❌ 网络错误: ' + e.message + '</div>';
   }
   btn.disabled = false;
   btn.innerHTML = '🔄 手动采集';
 }
+
 // ── 应援文案数据模式 ──
 let currentCheerMode = 'season';
 
@@ -352,7 +304,7 @@ const CRAWL_PRESETS = ['0 9 * * *', '0 9,21 * * *', '0 3,9,15,21 * * *'];
 
 function onCrawlPresetChange() {
   const val = document.getElementById('crawlPreset').value;
-  document.getElementById('crawlCustomGroup').style.display = val === 'custom' ? 'block' : 'none';
+  document.getElementById('crawlCustomGroup').classList.toggle('hidden', val !== 'custom');
 }
 
 async function refreshSchedulerConfig() {
@@ -368,12 +320,13 @@ async function refreshSchedulerConfig() {
   document.getElementById('weeklyStoryEnabled').checked = !!d.weekly_story_enabled;
 
   const sel = document.getElementById('crawlPreset');
+  const crawlGroup = document.getElementById('crawlCustomGroup');
   if (CRAWL_PRESETS.includes(d.kpl_crawl_cron)) {
     sel.value = d.kpl_crawl_cron;
-    document.getElementById('crawlCustomGroup').style.display = 'none';
+    crawlGroup.classList.add('hidden');
   } else {
     sel.value = 'custom';
-    document.getElementById('crawlCustomGroup').style.display = 'block';
+    crawlGroup.classList.remove('hidden');
     document.getElementById('crawlCustomCron').value = d.kpl_crawl_cron;
   }
 
@@ -415,12 +368,12 @@ async function refreshEvents() {
   const d = await r.json();
   const el = document.getElementById('eventList');
   if (!d.ok) {
-    el.innerHTML = '<div class="result error" style="margin:0">❌ ' + (d.error || '加载失败') + '</div>';
+    el.innerHTML = '<div class="result error result--flush">❌ ' + (d.error || '加载失败') + '</div>';
     return;
   }
   const events = d.events || [];
   if (!events.length) {
-    el.innerHTML = '<div style="font-size:13px;color:#888">暂无事件。可添加「王者荣耀亚运金牌赛」（2026-09-28，leadDays 30）。</div>';
+    el.innerHTML = '<div class="muted-13">暂无事件。可添加「王者荣耀亚运金牌赛」（2026-09-28，leadDays 30）。</div>';
     return;
   }
   const today = new Date();
@@ -429,36 +382,27 @@ async function refreshEvents() {
   el.innerHTML = events.map((ev) => {
     const daysUntil = diffDays(todayStr, ev.date);
     const inWindow = ev.active !== false && daysUntil >= 0 && daysUntil <= (ev.leadDays ?? 30);
-    const status = !ev.active ? '<span class="badge" style="background:#e5e7eb;color:#6b7280">已停用</span>'
-      : inWindow ? '<span class="badge" style="background:#dcfce7;color:#166534">命中中 · 剩 ' + daysUntil + ' 天</span>'
-      : daysUntil < 0 ? '<span class="badge" style="background:#f3f4f6;color:#9ca3af">已过期</span>'
-      : '<span class="badge" style="background:#e0e7ff;color:#3730a3">未开始 · ' + daysUntil + ' 天后</span>';
-    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #f1f5f9">'
+    const status = !ev.active
+      ? '<span class="badge badge--muted">已停用</span>'
+      : inWindow
+        ? '<span class="badge badge--live">命中中 · 剩 ' + daysUntil + ' 天</span>'
+        : daysUntil < 0
+          ? '<span class="badge badge--expired">已过期</span>'
+          : '<span class="badge badge--upcoming">未开始 · ' + daysUntil + ' 天后</span>';
+    return '<div class="event-row">'
       + '<div>'
-      + '<div style="font-size:14px;font-weight:600">' + escapeHtml(ev.title)
-      + ' <span style="color:#888;font-weight:normal;font-size:12px">' + (ev.date || '-') + '</span></div>'
-      + '<div style="font-size:12px;color:#666;margin-top:2px">预告窗口: ' + (ev.leadDays ?? 30) + ' 天'
+      + '<div class="event-title">' + escapeHtml(ev.title)
+      + ' <span class="event-date">' + (ev.date || '-') + '</span></div>'
+      + '<div class="event-meta">预告窗口: ' + (ev.leadDays ?? 30) + ' 天'
       + ' · 类型: ' + (ev.type || 'match')
       + (ev.description ? ' · ' + escapeHtml(ev.description) : '') + '</div>'
-      + '<div style="margin-top:4px">' + status + '</div>'
+      + '<div class="mt4">' + status + '</div>'
       + '</div>'
-      + '<div class="btn-row" style="gap:6px">'
-      + '<button class="btn btn-outline" style="padding:4px 10px;font-size:12px" onclick="editEvent(' + JSON.stringify(ev._id) + ')">✏️ 编辑</button>'
-      + '<button class="btn btn-danger" style="padding:4px 10px;font-size:12px" onclick="deleteEvent(' + JSON.stringify(ev._id) + ')">🗑 删除</button>'
+      + '<div class="btn-row btn-row--sm">'
+      + '<button class="btn btn-sm btn-outline" onclick="editEvent(\'' + escapeJsString(ev._id) + '\')">✏️ 编辑</button>'
+      + '<button class="btn btn-sm btn-danger" onclick="deleteEvent(\'' + escapeJsString(ev._id) + '\')">🗑 删除</button>'
       + '</div></div>';
   }).join('');
-}
-
-function diffDays(a, b) {
-  const da = new Date(a + 'T00:00:00+08:00');
-  const db = new Date(b + 'T00:00:00+08:00');
-  return Math.round((db - da) / 86400000);
-}
-
-function escapeHtml(s) {
-  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-  ));
 }
 
 function fillEventForm(ev) {
@@ -530,6 +474,7 @@ async function deleteEvent(id) {
   if (d.ok) { resetEventForm(); refreshEvents(); }
 }
 
+// ── 初始化 ──
 (async function init() {
   const t = getToken();
   if (!t) { showLogin(); return; }

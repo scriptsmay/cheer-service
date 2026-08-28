@@ -1,210 +1,301 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI 配置管理 — Wuyan Cheer</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚙️</text></svg>">
-<link rel="stylesheet" href="/admin-static/admin.css">
-</head>
-<body>
-<div class="container">
-
-  <!-- ═══ 登录面板 ═══ -->
-  <div id="loginPanel">
-    <h1>🔐 登录管理后台</h1>
-    <p class="sub">使用 APP_USERS 中的账号登录</p>
-    <div class="card">
-      <div class="form-group">
-        <label>用户名</label>
-        <input id="loginUser" type="text" placeholder="请输入用户名" autocomplete="username">
-      </div>
-      <div class="form-group">
-        <label>密码</label>
-        <input id="loginPass" type="password" placeholder="请输入密码" autocomplete="current-password">
-      </div>
-      <div class="btn-row">
-        <button class="btn btn-primary" onclick="doLogin()">登录</button>
-      </div>
-      <div id="loginMsg"></div>
-    </div>
-  </div>
-
-  <!-- ═══ 管理面板 ═══ -->
-  <div id="adminPanel">
-    <div class="logout-bar">
-      <span>👤 已登录</span>
-      <button class="btn btn-danger" onclick="doLogout()">退出登录</button>
-    </div>
-    <h1>⚙️ Wuyan Cheer — AI 配置管理</h1>
-    <p class="sub">修改后即时生效，无需重启容器</p>
-
-    <!-- 当前状态 -->
-    <div class="card">
-      <h2>📋 当前配置 <span id="sourceBadge" class="badge badge-env"></span></h2>
-      <div style="font-size:13px;color:#666">
-        <div>Endpoint: <strong id="curUrl">-</strong></div>
-        <div>Model: <strong id="curModel">-</strong></div>
-        <div>API Key: <strong id="curKey">-</strong></div>
-      </div>
-    </div>
-
-    <!-- 修改配置 -->
-    <div class="card">
-      <h2>✏️ 修改配置</h2>
-      <div class="form-group">
-        <label>API Base URL</label>
-        <input id="inpUrl" placeholder="https://api.deepseek.com/v1">
-      </div>
-      <div class="form-group">
-        <label>API Key</label>
-        <input id="inpKey" type="password" placeholder="sk-xxxxxxxx">
-      </div>
-      <div class="form-group">
-        <label>Model</label>
-        <input id="inpModel" placeholder="deepseek-chat">
-      </div>
-      <div class="btn-row">
-        <button class="btn btn-primary" onclick="saveConfig()">💾 保存配置</button>
-        <button class="btn btn-outline" onclick="testAI()">🔍 测试连接</button>
-      </div>
-      <div id="cfgResult"></div>
-    </div>
-
-    <!-- 测试结果 -->
-    <div id="testResult"></div>
-
-    <!-- 应援文案数据模式 -->
-    <div class="card">
-      <h2>💬 应援文案数据模式 <span id="cheerModeSourceBadge" class="badge badge-env"></span></h2>
-      <p class="field-hint" style="margin-bottom:12px">控制 <code>/api/cheer</code> 生成文案时注入哪些数据。修改后下一次生成立即生效。</p>
-      <div id="cheerModeOptions" class="mode-options">
-        <div class="field-hint">⏳ 加载中...</div>
-      </div>
-
-      <div style="margin-top:14px;padding:12px;background:#f8fafc;border-radius:8px">
-        <div style="font-size:13px;font-weight:600;margin-bottom:8px">🎛 文案多样性开关</div>
-        <label class="checkbox-label" style="margin-bottom:6px">
-          <input id="dateCtxEnabled" type="checkbox" onchange="saveCheerSettings()">
-          <span>时间上下文（日期/节气/节日，命中才注入）</span>
-        </label>
-        <label class="checkbox-label" style="margin-bottom:6px">
-          <input id="humanizeEnabled" type="checkbox" onchange="saveCheerSettings()">
-          <span>反 AI 味校验（句式雷同/感叹号/口号化自动重生成）</span>
-        </label>
-        <label class="checkbox-label">
-          <input id="eventCtxEnabled" type="checkbox" onchange="saveCheerSettings()">
-          <span>赛事事件注入（亚运比赛日等，含赛前预告与倒数）</span>
-        </label>
-      </div>
-      <div id="cheerModeResult"></div>
-    </div>
-
-    <!-- 应援事件管理 -->
-    <div class="card">
-      <h2>📅 应援事件管理 <span id="eventSourceBadge" class="badge badge-env">DB</span></h2>
-      <p class="field-hint" style="margin-bottom:12px">配置赛事/节日事件，支持赛前 N 天预告（leadDays）。命中窗口内自动注入文案与倒计时，无需发版。事件日过后删除或关闭即可。</p>
-      <div id="eventList">
-        <div class="field-hint">⏳ 加载中...</div>
-      </div>
-
-      <div style="margin-top:16px;padding:12px;background:#f8fafc;border-radius:8px">
-        <div style="font-size:13px;font-weight:600;margin-bottom:10px" id="eventFormTitle">➕ 新增事件</div>
-        <input type="hidden" id="evtId">
-        <div class="form-group">
-          <label>日期（事件日）</label>
-          <input id="evtDate" type="date" placeholder="2026-09-28">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI 配置管理 — Wuyan Cheer</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚙️</text></svg>"
+    />
+    <link rel="stylesheet" href="/admin-static/admin.css" />
+  </head>
+  <body>
+    <div class="container">
+      <!-- ═══ 登录面板 ═══ -->
+      <div id="loginPanel">
+        <h1>🔐 登录管理后台</h1>
+        <p class="sub">使用 APP_USERS 中的账号登录</p>
+        <div class="card">
+          <div class="form-group">
+            <label>用户名</label>
+            <input
+              id="loginUser"
+              type="text"
+              placeholder="请输入用户名"
+              autocomplete="username"
+            />
+          </div>
+          <div class="form-group">
+            <label>密码</label>
+            <input
+              id="loginPass"
+              type="password"
+              placeholder="请输入密码"
+              autocomplete="current-password"
+            />
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" onclick="doLogin()">登录</button>
+          </div>
+          <div id="loginMsg"></div>
         </div>
-        <div class="form-group">
-          <label>标题</label>
-          <input id="evtTitle" placeholder="王者荣耀亚运金牌赛">
+      </div>
+
+      <!-- ═══ 管理面板 ═══ -->
+      <div id="adminPanel">
+        <div class="logout-bar">
+          <span>👤 已登录</span>
+          <button class="btn btn-danger" onclick="doLogout()">退出登录</button>
         </div>
-        <div class="form-group">
-          <label>赛前 N 天预告（0 = 仅当天，默认 30）</label>
-          <input id="evtLeadDays" type="number" min="0" max="365" value="30">
+        <h1>⚙️ Wuyan Cheer — AI 配置管理</h1>
+        <p class="sub">修改后即时生效，无需重启容器</p>
+
+        <!-- 当前状态 -->
+        <div class="card">
+          <h2>
+            📋 当前配置 <span id="sourceBadge" class="badge badge-env"></span>
+          </h2>
+          <div class="cfg-detail">
+            <div>Endpoint: <strong id="curUrl">-</strong></div>
+            <div>Model: <strong id="curModel">-</strong></div>
+            <div>API Key: <strong id="curKey">-</strong></div>
+          </div>
         </div>
-        <div class="form-group">
-          <label>类型</label>
-          <select id="evtType">
-            <option value="gold_medal">🏅 金牌赛</option>
-            <option value="match">⚔️ 比赛</option>
-            <option value="festival">🎉 节日</option>
-          </select>
+
+        <!-- 修改配置 -->
+        <div class="card">
+          <h2>✏️ 修改配置</h2>
+          <div class="form-group">
+            <label>API Base URL</label>
+            <input id="inpUrl" placeholder="https://api.deepseek.com/v1" />
+          </div>
+          <div class="form-group">
+            <label>API Key</label>
+            <input id="inpKey" type="password" placeholder="sk-xxxxxxxx" />
+          </div>
+          <div class="form-group">
+            <label>Model</label>
+            <input id="inpModel" placeholder="deepseek-chat" />
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" onclick="saveConfig()">
+              💾 保存配置
+            </button>
+            <button class="btn btn-outline" onclick="testAI()">
+              🔍 测试连接
+            </button>
+          </div>
+          <div id="cfgResult"></div>
         </div>
-        <div class="form-group">
-          <label>描述（可选）</label>
-          <input id="evtDesc" placeholder="名古屋亚运会王者荣耀淘汰赛+决赛，产生1金">
+
+        <!-- 测试结果 -->
+        <div id="testResult"></div>
+
+        <!-- 应援文案数据模式 -->
+        <div class="card">
+          <h2>
+            💬 应援文案数据模式
+            <span id="cheerModeSourceBadge" class="badge badge-env"></span>
+          </h2>
+          <p class="field-hint mb12">
+            控制
+            <code>/api/cheer</code>
+            生成文案时注入哪些数据。修改后下一次生成立即生效。
+          </p>
+          <div id="cheerModeOptions" class="mode-options">
+            <div class="field-hint">⏳ 加载中...</div>
+          </div>
+
+          <div class="panel mt14">
+            <div class="panel__title">🎛 文案多样性开关</div>
+            <div class="form-group">
+              <label class="checkbox-label mb6">
+                <input
+                  id="dateCtxEnabled"
+                  type="checkbox"
+                  onchange="saveCheerSettings()"
+                />
+                <span>时间上下文（日期/节气/节日，命中才注入）</span>
+              </label>
+            </div>
+            <div class="form-group">
+              <label class="checkbox-label mb6">
+                <input
+                  id="humanizeEnabled"
+                  type="checkbox"
+                  onchange="saveCheerSettings()"
+                />
+                <span>反 AI 味校验（句式雷同/感叹号/口号化自动重生成）</span>
+              </label>
+            </div>
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input
+                  id="eventCtxEnabled"
+                  type="checkbox"
+                  onchange="saveCheerSettings()"
+                />
+                <span>赛事事件注入（亚运比赛日等，含赛前预告与倒数）</span>
+              </label>
+            </div>
+          </div>
+          <div id="cheerModeResult"></div>
         </div>
-        <div class="form-group">
-          <label class="checkbox-label">
-            <input id="evtActive" type="checkbox" checked>
-            <span>启用</span>
-          </label>
+
+        <!-- 应援事件管理 -->
+        <div class="card">
+          <h2>
+            📅 应援事件管理
+            <span id="eventSourceBadge" class="badge badge-env">DB</span>
+          </h2>
+          <p class="field-hint mb12">
+            配置赛事/节日事件，支持赛前 N
+            天预告（leadDays）。命中窗口内自动注入文案与倒计时，无需发版。事件日过后删除或关闭即可。
+          </p>
+          <div id="eventList">
+            <div class="field-hint">⏳ 加载中...</div>
+          </div>
+
+          <div class="panel mt16">
+            <div class="panel__title mb10" id="eventFormTitle">➕ 新增事件</div>
+            <input type="hidden" id="evtId" />
+            <div class="form-group">
+              <label>日期（事件日）</label>
+              <input id="evtDate" type="date" placeholder="2026-09-28" />
+            </div>
+            <div class="form-group">
+              <label>标题</label>
+              <input id="evtTitle" placeholder="王者荣耀亚运金牌赛" />
+            </div>
+            <div class="form-group">
+              <label>赛前 N 天预告（0 = 仅当天，默认 30）</label>
+              <input
+                id="evtLeadDays"
+                type="number"
+                min="0"
+                max="365"
+                value="30"
+              />
+            </div>
+            <div class="form-group">
+              <label>类型</label>
+              <select id="evtType">
+                <option value="gold_medal">🏅 金牌赛</option>
+                <option value="match">⚔️ 比赛</option>
+                <option value="festival">🎉 节日</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>描述（可选）</label>
+              <input
+                id="evtDesc"
+                placeholder="名古屋亚运会王者荣耀淘汰赛+决赛，产生1金"
+              />
+            </div>
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input id="evtActive" type="checkbox" checked />
+                <span>启用</span>
+              </label>
+            </div>
+            <div class="btn-row">
+              <button class="btn btn-primary" onclick="saveEvent()">
+                💾 保存事件
+              </button>
+              <button class="btn btn-outline" onclick="resetEventForm()">
+                清空表单
+              </button>
+            </div>
+            <div id="eventResult"></div>
+          </div>
         </div>
-        <div class="btn-row">
-          <button class="btn btn-primary" onclick="saveEvent()">💾 保存事件</button>
-          <button class="btn btn-outline" onclick="resetEventForm()">清空表单</button>
+
+        <!-- 定时任务配置 -->
+        <div class="card">
+          <h2>
+            ⏰ 定时任务配置
+            <span id="schedulerSourceBadge" class="badge badge-env"></span>
+          </h2>
+          <p class="field-hint mb12">
+            调整采集频率和周报任务开关。保存后 cron
+            变更立即重建任务，无需重启容器。
+          </p>
+
+          <div class="form-group">
+            <label>KPL 采集频率</label>
+            <select id="crawlPreset" onchange="onCrawlPresetChange()">
+              <option value="0 9 * * *">每天 1 次（09:00）</option>
+              <option value="0 9,21 * * *">每天 2 次（09:00 / 21:00）</option>
+              <option value="0 3,9,15,21 * * *">
+                每 6 小时 1 次（03/09/15/21）
+              </option>
+              <option value="custom">自定义 cron</option>
+            </select>
+          </div>
+          <div class="form-group hidden" id="crawlCustomGroup">
+            <label>自定义 cron（5 段：分 时 日 月 周）</label>
+            <input id="crawlCustomCron" placeholder="例如：0 9 * * *" />
+          </div>
+
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input id="weeklyStoryEnabled" type="checkbox" />
+              <span>启用周报任务（每周一 05:00）</span>
+            </label>
+            <div class="field-hint">缺赛期缺少周环比数据，建议关闭。</div>
+          </div>
+
+          <div class="btn-row">
+            <button class="btn btn-primary" onclick="saveSchedulerConfig()">
+              💾 保存配置
+            </button>
+            <button class="btn btn-outline" onclick="refreshSchedulerConfig()">
+              ↻ 重新加载
+            </button>
+          </div>
+          <div id="schedulerResult"></div>
+          <div id="schedulerNextRun" class="field-hint next-run"></div>
         </div>
-        <div id="eventResult"></div>
+
+        <!-- 数据采集 -->
+        <div class="card">
+          <h2>📡 KPL 数据采集</h2>
+          <p class="card-intro">
+            手动触发 Python 爬虫采集 KPL 数据（main.py +
+            fetch-schedule.py），异步执行，结果见容器日志。
+          </p>
+          <div id="syncStatus" class="mb16">
+            <div class="loading">⏳ 加载中...</div>
+          </div>
+          <div id="scheduleInfo" class="panel mb16">
+            <div class="panel__subtitle">⏰ 定时采集任务</div>
+            <div id="scheduleList">
+              <div class="muted-12">⏳ 加载中...</div>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button
+              class="btn btn-outline"
+              id="crawlBtn"
+              onclick="triggerCrawl()"
+            >
+              🔄 手动采集
+            </button>
+            <button
+              class="btn btn-outline"
+              id="refreshBtn"
+              onclick="refreshSyncStatus()"
+            >
+              ↻ 刷新状态
+            </button>
+          </div>
+          <div id="crawlResult"></div>
+        </div>
       </div>
     </div>
 
-    <!-- 定时任务配置 -->
-    <div class="card">
-      <h2>⏰ 定时任务配置 <span id="schedulerSourceBadge" class="badge badge-env"></span></h2>
-      <p class="field-hint" style="margin-bottom:12px">调整采集频率和周报任务开关。保存后 cron 变更立即重建任务，无需重启容器。</p>
-
-      <div class="form-group">
-        <label>KPL 采集频率</label>
-        <select id="crawlPreset" onchange="onCrawlPresetChange()">
-          <option value="0 9 * * *">每天 1 次（09:00）</option>
-          <option value="0 9,21 * * *">每天 2 次（09:00 / 21:00）</option>
-          <option value="0 3,9,15,21 * * *">每 6 小时 1 次（03/09/15/21）</option>
-          <option value="custom">自定义 cron</option>
-        </select>
-      </div>
-      <div class="form-group" id="crawlCustomGroup" style="display:none">
-        <label>自定义 cron（5 段：分 时 日 月 周）</label>
-        <input id="crawlCustomCron" placeholder="例如：0 9 * * *">
-      </div>
-
-      <div class="form-group">
-        <label class="checkbox-label">
-          <input id="weeklyStoryEnabled" type="checkbox">
-          <span>启用周报任务（每周一 05:00）</span>
-        </label>
-        <div class="field-hint">缺赛期缺少周环比数据，建议关闭。</div>
-      </div>
-
-      <div class="btn-row">
-        <button class="btn btn-primary" onclick="saveSchedulerConfig()">💾 保存配置</button>
-        <button class="btn btn-outline" onclick="refreshSchedulerConfig()">↻ 重新加载</button>
-      </div>
-      <div id="schedulerResult"></div>
-      <div id="schedulerNextRun" class="field-hint" style="margin-top:10px;color:#16a34a"></div>
-    </div>
-
-    <!-- 数据采集 -->
-    <div class="card">
-      <h2>📡 KPL 数据采集</h2>
-      <p style="font-size:13px;color:#666;margin-bottom:12px">手动触发 Python 爬虫采集 KPL 数据（main.py + fetch-schedule.py），异步执行，结果见容器日志。</p>
-      <div id="syncStatus" style="margin-bottom:16px">
-        <div style="font-size:13px;color:#666;margin-bottom:8px">⏳ 加载中...</div>
-      </div>
-      <div id="scheduleInfo" style="margin-bottom:16px;padding:12px;background:#f8fafc;border-radius:8px">
-        <div style="font-size:12px;color:#666;margin-bottom:8px">⏰ 定时采集任务</div>
-        <div id="scheduleList"><div style="font-size:12px;color:#888">⏳ 加载中...</div></div>
-      </div>
-      <div class="btn-row">
-        <button class="btn btn-outline" id="crawlBtn" onclick="triggerCrawl()">🔄 手动采集</button>
-        <button class="btn btn-outline" id="refreshBtn" onclick="refreshSyncStatus()">↻ 刷新状态</button>
-      </div>
-      <div id="crawlResult"></div>
-    </div>
-  </div>
-
-</div>
-
-<script src="/admin-static/admin.js"></script>
-</body>
+    <script src="/admin-static/admin-utils.js"></script>
+    <script src="/admin-static/admin.js"></script>
+  </body>
 </html>
