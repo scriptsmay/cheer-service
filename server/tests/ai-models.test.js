@@ -10,6 +10,7 @@ const assert = require('node:assert/strict');
 const aiConfig = require('../src/services/ai-config');
 const { fetchAvailableModels, resolveModelsUrl, isPrivateOrLocalhost } =
   require('../src/services/ai-models');
+const dns = require('node:dns').promises;
 
 // 默认生效配置（可被各测试覆盖）
 function defaultCfg() {
@@ -23,10 +24,12 @@ function defaultCfg() {
 
 let fetchCalls = [];
 let savedFetch = global.fetch;
+const savedDnsLookup = dns.lookup;
 
 beforeEach(() => {
   aiConfig.getEffectiveConfig = defaultCfg;
   fetchCalls = [];
+  dns.lookup = async () => [{ address: '8.8.8.8', family: 4 }];
   global.fetch = async (url, opts) => {
     fetchCalls.push({ url, opts });
     return new Response(JSON.stringify({ data: [{ id: 'a' }, { id: 'b' }] }), {
@@ -38,6 +41,7 @@ beforeEach(() => {
 
 afterEach(() => {
   global.fetch = savedFetch;
+  dns.lookup = savedDnsLookup;
 });
 
 // ── resolveModelsUrl 单元测试（不依赖 fetch）──

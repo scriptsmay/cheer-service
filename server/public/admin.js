@@ -129,7 +129,7 @@ async function fetchModelList() {
   const key = document.getElementById('inpKey').value.trim();
   const resEl = document.getElementById('modelFetchResult');
   const btn = document.getElementById('fetchModelsBtn');
-  const cacheKey = url || '(current)';
+  const cacheKey = (url || '(current)') + '\n' + key;
   const cached = fetchedModelsCache.find((x) => x.endpoint === cacheKey);
   if (cached) {
     renderModelPicker(cached.models);
@@ -171,9 +171,14 @@ async function fetchModelList() {
 
 function renderModelPicker(models) {
   const box = document.getElementById('modelPicker');
-  box.innerHTML = models
-    .map((m) => '<div class="model-picker__item" role="option" onclick="pickModel(\'' + escapeJsString(m) + '\')">' + escapeHtml(m) + '</div>')
-    .join('');
+  box.replaceChildren(...models.map((m) => {
+    const item = document.createElement('div');
+    item.className = 'model-picker__item';
+    item.setAttribute('role', 'option');
+    item.textContent = m;
+    item.addEventListener('click', () => pickModel(m));
+    return item;
+  }));
   box.classList.remove('hidden');
 }
 
@@ -215,9 +220,14 @@ async function fetchModelsForCurrent() {
 
 function renderCurrentModelPicker(models) {
   const box = document.getElementById('curModelPicker');
-  box.innerHTML = models
-    .map((m) => '<div class="model-picker__item" role="option" onclick="pickCurrentModel(\'' + escapeJsString(m) + '\')">' + escapeHtml(m) + '</div>')
-    .join('');
+  box.replaceChildren(...models.map((m) => {
+    const item = document.createElement('div');
+    item.className = 'model-picker__item';
+    item.setAttribute('role', 'option');
+    item.textContent = m;
+    item.addEventListener('click', () => pickCurrentModel(m));
+    return item;
+  }));
   box.classList.remove('hidden');
 }
 

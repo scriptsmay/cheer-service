@@ -13,6 +13,7 @@
  */
 
 const aiConfig = require('./ai-config');
+const dns = require('node:dns').promises;
 
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024; // 5MB 响应上限
 const MAX_MODELS = 1000; // 模型数量上限
@@ -97,8 +98,8 @@ function isPrivateOrLocalhost(hostname) {
   }
 
   // IPv6 字面量（[...] 形式）
-  if (h.startsWith('[')) {
-    const v6 = h.slice(1, -1).toLowerCase().split('%')[0];
+  if (h.startsWith('[') || h.includes(':')) {
+    const v6 = h.replace(/^\[/, '').replace(/\]$/, '').toLowerCase().split('%')[0];
     if (v6 === '::1' || v6 === '::') return true; // 环回 / 未指定
     if (v6.startsWith('fe80')) return true; // 链路本地
     if (v6.startsWith('fc') || v6.startsWith('fd')) return true; // 唯一本地地址
@@ -107,6 +108,25 @@ function isPrivateOrLocalhost(hostname) {
 
   // 非字面量域名：不在此同步判定（交给下游 fetch 的超时/失败兜底）
   return false;
+}
+
+async function assertResolvedPublicHost(hostname) {
+  if (isPrivateOrLocalhost(hostname)) return;
+  // 防止域名解析到内网地址；fetch 禁止自动重定向以避免绕过此检查。
+  let records;
+  try {
+    records = await dns.lookup(hostname, { all: true, verbatim: true });
+  } catch (e) {
+    const err = new Error(`DNS 解析失败: ${hostname}`);
+    err.code = 'DNS_LOOKUP_FAILED';
+    err.cause = e;
+    throw err;
+  }
+  if (!records.length || records.some((r) => isPrivateOrLocalhost(r.address))) {
+    const err = new Error('出站地址被拒绝（域名解析到本地或内网地址）');
+    err.code = 'SSRF_BLOCKED';
+    throw err;
+  }
 }
 
 /**
@@ -165,9 +185,12 @@ async function fetchAvailableModels(opts = {}) {
   const modelsUrl = resolveModelsUrl(resolvedBaseUrl);
 
   try {
+    const target = new URL(modelsUrl);
+    await assertResolvedPublicHost(target.hostname);
     const resp = await fetch(modelsUrl, {
       method: 'GET',
       headers: { Authorization: `Bearer ${resolvedKey}` },
+      redirect: 'error',
       signal: AbortSignal.timeout(15000),
     });
 
