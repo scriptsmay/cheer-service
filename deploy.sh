@@ -2,8 +2,8 @@
 # ============================================================
 # cheer-service 部署脚本 -- 本地一键部署到远程机器
 # 用法: ./deploy.sh
-# 流程: 打包源码 → 上传 → 远程解压(保留 .env/logs) → 构建新镜像(旧容器在线)
-#       → down/up 切换 → 健康检查(失败自动回滚上一版本镜像并 exit 1)
+# 流程: 打包源码 → 上传 → 远程解压到 staging → staging 内构建新镜像(旧容器在线)
+#       → 替换正式目录 → down/up 切换 → 健康检查(up 失败/健康检查失败自动回滚上一版本镜像并 exit 1)
 # ============================================================
 set -euo pipefail
 
@@ -174,6 +174,19 @@ log "解压源码到 staging..."
 tar -xzf "${ARCHIVE}" -C "${STAGING}"
 rm -f "${ARCHIVE}"
 
+# -- env_file 兜底：compose 加载模型要求 .env 存在（build 阶段仅做变量插值，不影响镜像内容） --
+if [ -f /tmp/cheer-service.env.bak ]; then
+  cp /tmp/cheer-service.env.bak "${STAGING}/.env"
+else
+  : > "${STAGING}/.env"
+fi
+
+# -- 在 staging 目录先构建镜像（旧容器保持在线，正式目录未被触碰） --
+# 构建失败时正式目录仍是旧代码、线上容器不受影响，不存在「磁盘新代码 / 容器旧镜像」的混淆窗口
+PROJECT_NAME="$(basename "${DEPLOY_DIR}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')"
+log "构建新镜像（staging 内构建，旧容器保持运行）..."
+docker compose -p "${PROJECT_NAME}" --project-directory "${STAGING}" -f "${STAGING}/docker-compose.yml" build api
+
 # -- 替换旧代码；保留运行时状态（.env / logs） --
 log "更新部署目录（保留 .env 与 logs）..."
 find "${DEPLOY_DIR}" -mindepth 1 -maxdepth 1 ! -name '.env' ! -name 'logs' -exec rm -rf {} +
@@ -190,14 +203,28 @@ else
   warn "可参考 .env.example 创建"
 fi
 
-# -- 先构建新镜像（旧容器保持在线服务），构建失败不影响线上 --
-log "构建新镜像（旧容器保持运行）..."
-docker compose build api
+# -- 统一回滚：up 失败 / 健康检查失败都恢复上一版本镜像 --
+rollback() {
+  warn "$1"
+  if [ -n "${OLD_IMAGE_ID}" ]; then
+    warn "回滚到上一版本镜像..."
+    docker compose down api 2>/dev/null || true
+    docker tag "${OLD_IMAGE_ID}" "${OLD_IMAGE_REF}"
+    docker compose up -d --force-recreate api
+    warn "已回滚。请检查本地代码 / docker compose logs -f api 后重试"
+  else
+    warn "无回滚点（首次部署），容器保持当前状态"
+  fi
+  exit 1
+}
 
 # -- 切换：down + up 只需数秒 --
 log "切换到新镜像..."
 docker compose down api 2>/dev/null || true
-docker compose up -d api
+# set -euo pipefail 下 up 失败若不显式捕获，会跳过回滚导致服务中断（旧容器已停、新容器未起）
+if ! docker compose up -d api; then
+  rollback "新容器启动失败（docker compose up 异常）"
+fi
 
 # -- 健康检查（严格，60s 内不通过则回滚） --
 log "等待服务就绪..."
@@ -223,17 +250,7 @@ for i in $(seq 1 30); do
 done
 
 if [ "${HEALTH_OK}" -ne 1 ]; then
-  warn "健康检查未通过（60 秒内）"
-  if [ -n "${OLD_IMAGE_ID}" ]; then
-    warn "回滚到上一版本镜像..."
-    docker compose down api 2>/dev/null || true
-    docker tag "${OLD_IMAGE_ID}" "${OLD_IMAGE_REF}"
-    docker compose up -d --force-recreate api
-    warn "已回滚。请检查本地代码 / docker compose logs -f api 后重试"
-  else
-    warn "无回滚点（首次部署），容器保持当前状态"
-  fi
-  exit 1
+  rollback "健康检查未通过（60 秒内）"
 fi
 
 log "健康检查通过"
@@ -248,7 +265,7 @@ ssh -p "$DEPLOY_PORT" "${DEPLOY_USER}@${DEPLOY_HOST}" \
 rm -f "$REMOTE_SCRIPT"
 
 if [ "${REMOTE_STATUS}" -ne 0 ]; then
-  err "远程部署失败（exit ${REMOTE_STATUS}）——线上已自动回滚到上一版本，请排查后重试"
+  err "远程部署失败（exit ${REMOTE_STATUS}）——线上未切换或已自动回滚到上一版本，请排查后重试"
 fi
 
 # -- 5. 外部健康检查（可选，信息性质；权威判定在容器内检查）--

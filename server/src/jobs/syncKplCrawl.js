@@ -6,6 +6,7 @@
  */
 
 const { spawn } = require('child_process');
+const http = require('http');
 const https = require('https');
 
 const KPL_DIR = process.env.KPL_DATA_DIR || '/app/kpl-data-daily';
@@ -25,9 +26,16 @@ function sendUptimeHeartbeat(ok, msg) {
   if (!UPTIME_PUSH_URL) return;
   try {
     const url = new URL(UPTIME_PUSH_URL);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      console.error(`[kpl-crawl] Uptime heartbeat error: unsupported protocol ${url.protocol}`);
+      return;
+    }
     url.searchParams.set('status', ok ? 'up' : 'down');
     url.searchParams.set('msg', (msg || (ok ? 'OK' : 'FAIL')).slice(0, 80));
-    const req = https.get(url, { timeout: 10000 }, (res) => {
+    // UPTIME_PUSH_URL 是通用配置名，按实际协议选 transport（此前固定 https 会
+    // 让 http:// 配置的心跳全部上报失败）
+    const transport = url.protocol === 'https:' ? https : http;
+    const req = transport.get(url, { timeout: 10000 }, (res) => {
       res.resume();
       console.log(`[kpl-crawl] Uptime heartbeat sent (${res.statusCode})`);
     });
