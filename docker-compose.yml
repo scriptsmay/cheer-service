@@ -84,6 +84,8 @@ services:
       - GITHUB_PUSH_SSH=${GITHUB_PUSH_SSH:-true}
       - GIT_USER_NAME=${GIT_USER_NAME:-KPL Data Bot}
       - GIT_USER_EMAIL=${GIT_USER_EMAIL:-bot@kplwuyan.site}
+      # Uptime Kuma push 心跳: kpl-crawl 每次执行完上报(见 jobs/syncKplCrawl.js)
+      - UPTIME_PUSH_URL=${UPTIME_PUSH_URL:-}
       # SSH push 认证: 用挂载的私钥, StrictHostKeyChecking=accept-new 兜底(Dockerfile 已预置 known_hosts)
       - GIT_SSH_COMMAND=ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new
     depends_on:

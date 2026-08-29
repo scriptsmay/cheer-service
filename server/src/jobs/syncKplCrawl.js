@@ -6,12 +6,37 @@
  */
 
 const { spawn } = require('child_process');
+const https = require('https');
 
 const KPL_DIR = process.env.KPL_DATA_DIR || '/app/kpl-data-daily';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
 const GITHUB_REPO = process.env.GITHUB_REPO || ''; // e.g. "wetsk/kpl-data-daily"
 const GIT_USER = process.env.GIT_USER_NAME || 'KPL Data Bot';
 const GIT_EMAIL = process.env.GIT_USER_EMAIL || 'bot@kplwuyan.site';
+// Uptime Kuma push 心跳地址（监控"每日采集是否如期执行"，未配置则跳过）
+const UPTIME_PUSH_URL = process.env.UPTIME_PUSH_URL || '';
+
+/**
+ * 上报 Uptime Kuma push 心跳（fire-and-forget，不阻塞主流程）
+ * @param {boolean} ok - 主采集 main.py 是否成功
+ * @param {string} msg - 附加信息
+ */
+function sendUptimeHeartbeat(ok, msg) {
+  if (!UPTIME_PUSH_URL) return;
+  try {
+    const url = new URL(UPTIME_PUSH_URL);
+    url.searchParams.set('status', ok ? 'up' : 'down');
+    url.searchParams.set('msg', (msg || (ok ? 'OK' : 'FAIL')).slice(0, 80));
+    const req = https.get(url, { timeout: 10000 }, (res) => {
+      res.resume();
+      console.log(`[kpl-crawl] Uptime heartbeat sent (${res.statusCode})`);
+    });
+    req.on('timeout', () => req.destroy());
+    req.on('error', (e) => console.error('[kpl-crawl] Uptime heartbeat error:', e.message));
+  } catch (e) {
+    console.error('[kpl-crawl] Uptime heartbeat error:', e.message);
+  }
+}
 
 // derived 文件中每次采集都会刷新的时间戳/元数据字段，不作为数据变更依据
 // git diff -I 按行忽略匹配这些模式的变更，只有数据内容真正变化才算
@@ -392,6 +417,10 @@ async function syncKplCrawl() {
 
   // 采集完成后自动 git push
   results.git = await gitPush();
+
+  // 心跳：主采集成功 = up；main.py 失败 = down（fetch-schedule 失败不视为致命）
+  sendUptimeHeartbeat(!!(results.main && results.main.ok),
+    results.main && results.main.ok ? 'OK' : `main.py failed: ${(results.main && results.main.error) || 'unknown'}`);
 
   return results;
 }
