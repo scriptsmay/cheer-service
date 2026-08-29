@@ -2,6 +2,8 @@
 # ============================================================
 # cheer-service 部署脚本 -- 本地一键部署到远程机器
 # 用法: ./deploy.sh
+# 流程: 打包源码 → 上传 → 远程解压(保留 .env/logs) → 构建新镜像(旧容器在线)
+#       → down/up 切换 → 健康检查(失败自动回滚上一版本镜像并 exit 1)
 # ============================================================
 set -euo pipefail
 
@@ -69,7 +71,7 @@ log "SSH 连接正常"
 # 远程路径必须与 docker-compose.yml 的 bind mount 一致。
 # "重命名"靠解压时 --strip-components=1 实现: tar 里的 kpl_data_daily/ 前缀被剥掉,
 # 内容直接落到 KPL_REMOTE_DIR, 因此本地目录名与远程无关, 改任一方都不影响。
-KPL_REMOTE_DIR="/root/kpl-data-daily"
+KPL_REMOTE_DIR="${KPL_REMOTE_DIR:-/root/kpl-data-daily}"
 if [ -n "${KPL_SOURCE_DIR:-}" ] && [ -d "${KPL_SOURCE_DIR}" ]; then
   log "同步 kpl-data-daily (${KPL_SOURCE_DIR}) → 远程 ${KPL_REMOTE_DIR}..."
   KPL_TAR="/tmp/kpl-data-daily-${TIMESTAMP}.tar.gz"
@@ -100,7 +102,7 @@ else
 fi
 
 # -- 2. 打包源码 --
-log "打包源码（排除 node_modules / data / .git）..."
+log "打包源码（排除 node_modules / data / .git / .env）..."
 
 cd "$SCRIPT_DIR"
 tar -czf "$ARCHIVE" \
@@ -109,6 +111,7 @@ tar -czf "$ARCHIVE" \
   --exclude='.git' \
   --exclude='data/mongodb' \
   --exclude='data/export' \
+  --exclude='.env' \
   --exclude='.env.deploy' \
   --exclude='deploy.sh' \
   --exclude='*.tar.gz' \
@@ -135,6 +138,8 @@ ARCHIVE="$1"
 DEPLOY_DIR="$2"
 TIMESTAMP="$3"
 
+API_CONTAINER="wuyan-api"
+
 log()  { echo "[remote] $*"; }
 warn() { echo "[remote] $*"; }
 
@@ -145,83 +150,123 @@ fi
 
 cd "${DEPLOY_DIR}"
 
-# 备份 .env
+# -- 记录当前运行镜像（失败回滚点） --
+OLD_IMAGE_ID=""
+OLD_IMAGE_REF=""
+if docker inspect "${API_CONTAINER}" >/dev/null 2>&1; then
+  OLD_IMAGE_ID=$(docker inspect --format '{{.Image}}' "${API_CONTAINER}")
+  OLD_IMAGE_REF=$(docker inspect --format '{{.Config.Image}}' "${API_CONTAINER}")
+  log "记录回滚点: ${OLD_IMAGE_REF} (${OLD_IMAGE_ID:0:12})"
+fi
+
+# -- 备份远程 .env（目录清理不触碰 .env，此为防新包误带 .env 的双保险） --
 if [ -f .env ]; then
   cp .env /tmp/cheer-service.env.bak
   log "已备份远程 .env -> /tmp/cheer-service.env.bak"
 fi
 
-# 解压覆盖
-log "解压源码..."
-tar -xzf "${ARCHIVE}"
-rm "${ARCHIVE}"
+# -- 解压到 staging 目录再替换（中断不会留下半新半旧代码） --
+STAGING="${DEPLOY_DIR}.staging-${TIMESTAMP}"
+rm -rf "${STAGING}"
+mkdir -p "${STAGING}"
+trap 'rm -rf "${STAGING:-}"' EXIT
+log "解压源码到 staging..."
+tar -xzf "${ARCHIVE}" -C "${STAGING}"
+rm -f "${ARCHIVE}"
 
-# 恢复 .env
+# -- 替换旧代码；保留运行时状态（.env / logs） --
+log "更新部署目录（保留 .env 与 logs）..."
+find "${DEPLOY_DIR}" -mindepth 1 -maxdepth 1 ! -name '.env' ! -name 'logs' -exec rm -rf {} +
+cp -a "${STAGING}"/. "${DEPLOY_DIR}/"
+rm -rf "${STAGING}"
+
+# -- 恢复 .env（以远程为准） --
 if [ -f /tmp/cheer-service.env.bak ]; then
   cp /tmp/cheer-service.env.bak .env
-  rm /tmp/cheer-service.env.bak
+  rm -f /tmp/cheer-service.env.bak
   log "已恢复远程 .env"
 else
   warn "远程 .env 不存在，请确保 .env 文件已配置"
   warn "可参考 .env.example 创建"
 fi
 
-# 重建 api 容器
-log "停止旧容器..."
-docker compose down api 2>/dev/null || true
-
-log "构建新镜像..."
+# -- 先构建新镜像（旧容器保持在线服务），构建失败不影响线上 --
+log "构建新镜像（旧容器保持运行）..."
 docker compose build api
 
-log "启动新容器..."
+# -- 切换：down + up 只需数秒 --
+log "切换到新镜像..."
+docker compose down api 2>/dev/null || true
 docker compose up -d api
 
-# 等待启动
+# -- 健康检查（严格，60s 内不通过则回滚） --
 log "等待服务就绪..."
-for i in $(seq 1 15); do
-  if docker compose ps api | grep -q 'Up'; then
+HEALTH_OK=0
+for i in $(seq 1 30); do
+  if docker compose exec -T api node -e '
+    const http = require("http");
+    http.get("http://localhost:3000/api/health", (res) => {
+      let data = "";
+      res.on("data", chunk => data += chunk);
+      res.on("end", () => {
+        try {
+          const j = JSON.parse(data);
+          process.exit(j.status === "ok" ? 0 : 1);
+        } catch { process.exit(1); }
+      });
+    }).on("error", () => process.exit(1));
+  ' 2>/dev/null; then
+    HEALTH_OK=1
     break
   fi
   sleep 2
 done
 
-# 健康检查
-log "健康检查..."
-sleep 2
-if docker compose exec -T api node -e '
-  const http = require("http");
-  http.get("http://localhost:3000/api/health", (res) => {
-    let data = "";
-    res.on("data", chunk => data += chunk);
-    res.on("end", () => {
-      const j = JSON.parse(data);
-      process.exit(j.status === "ok" ? 0 : 1);
-    });
-  }).on("error", () => process.exit(1));
-' 2>/dev/null; then
-  log "健康检查通过"
-else
-  warn "容器内健康检查失败，尝试外部检查..."
-  sleep 3
+if [ "${HEALTH_OK}" -ne 1 ]; then
+  warn "健康检查未通过（60 秒内）"
+  if [ -n "${OLD_IMAGE_ID}" ]; then
+    warn "回滚到上一版本镜像..."
+    docker compose down api 2>/dev/null || true
+    docker tag "${OLD_IMAGE_ID}" "${OLD_IMAGE_REF}"
+    docker compose up -d --force-recreate api
+    warn "已回滚。请检查本地代码 / docker compose logs -f api 后重试"
+  else
+    warn "无回滚点（首次部署），容器保持当前状态"
+  fi
+  exit 1
 fi
 
+log "健康检查通过"
 log "部署完成"
 REMOTE_EOF
 
-# 上传远程脚本并执行
+# 上传远程脚本并执行（透传远程脚本退出码，失败即中止）
 scp -P "$DEPLOY_PORT" "$REMOTE_SCRIPT" "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/"
+REMOTE_STATUS=0
 ssh -p "$DEPLOY_PORT" "${DEPLOY_USER}@${DEPLOY_HOST}" \
-  "bash /tmp/$(basename "$REMOTE_SCRIPT") '$ARCHIVE' '$DEPLOY_DIR' '$TIMESTAMP'; rm /tmp/$(basename "$REMOTE_SCRIPT")"
-rm "$REMOTE_SCRIPT"
+  "bash /tmp/$(basename "$REMOTE_SCRIPT") '$ARCHIVE' '$DEPLOY_DIR' '$TIMESTAMP'; rc=\$?; rm -f /tmp/$(basename "$REMOTE_SCRIPT"); exit \$rc" || REMOTE_STATUS=$?
+rm -f "$REMOTE_SCRIPT"
 
-# -- 5. 外部健康检查（可选）--
+if [ "${REMOTE_STATUS}" -ne 0 ]; then
+  err "远程部署失败（exit ${REMOTE_STATUS}）——线上已自动回滚到上一版本，请排查后重试"
+fi
+
+# -- 5. 外部健康检查（可选，信息性质；权威判定在容器内检查）--
 if [ -n "${HEALTH_URL}" ]; then
   log "外部健康检查 (${HEALTH_URL})..."
   sleep 2
-  if curl -sf --max-time 10 "$HEALTH_URL" >/dev/null 2>&1; then
+  EXT_OK=0
+  for i in 1 2 3; do
+    if curl -sf --max-time 10 "$HEALTH_URL" >/dev/null 2>&1; then
+      EXT_OK=1
+      break
+    fi
+    sleep 3
+  done
+  if [ "${EXT_OK}" -eq 1 ]; then
     log "外部可达"
   else
-    warn "外部健康检查超时（可能正常，cloudflared 隧道延迟较高）"
+    warn "外部健康检查未通过（可能为 cloudflared 隧道延迟，uptime-kuma 侧可确认实际状态）"
   fi
 fi
 
