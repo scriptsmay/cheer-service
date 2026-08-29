@@ -21,7 +21,7 @@ const Module = require('module');
 
 const dc = require('../src/lib/date-context');
 const { __test } = require('../src/routes/cheer');
-const { buildGroundedSource, buildSystemPrompt, inspectGeneratedOutput, checkAiFlavor } = __test;
+const { buildGroundedSource, buildSystemPrompt, inspectGeneratedOutput, checkAiFlavor, collectAnchorNumbers } = __test;
 
 // 复刻 cheer-data-mode.test.js 的赛季文档，供 buildGroundedSource 使用
 const OVERVIEW = {
@@ -236,10 +236,34 @@ describe('buildSystemPrompt — 多样性上下文注入', () => {
   test('dateContext 命中时注入"今日背景"段', () => {
     const phase = dc.resolveEventPhase(EVENT_ASIAN_GAMES, '2026-09-28');
     const dateContext = dc.getDateContext('2026-09-28', phase, EVENT_ASIAN_GAMES);
-    const prompt = buildSystemPrompt('daily', sourceCareer, 'career', { dateContext, eventHit: { _id: 'e1' } });
+    const prompt = buildSystemPrompt('daily', sourceCareer, 'career', {
+      dateContext, eventHit: { _id: 'e1' }, eventPhase: phase,
+    });
     assert.ok(prompt.includes('今日背景：9月28日 星期一'), '应注入今日背景');
     assert.ok(prompt.includes('亚运会王者荣耀金牌赛'), '背景应含事件文案');
-    assert.ok(prompt.includes('最多提及一次时间语境'), '应含注入约束提示');
+  });
+
+  test('countdown/eve/today 档：赛事语境必含（强提示），无软提示措辞', () => {
+    for (const dateStr of ['2026-09-26', '2026-09-27', '2026-09-28']) {
+      const phase = dc.resolveEventPhase(EVENT_ASIAN_GAMES, dateStr);
+      const dateContext = dc.getDateContext(dateStr, phase, EVENT_ASIAN_GAMES);
+      const prompt = buildSystemPrompt('daily', sourceCareer, 'career', {
+        dateContext, eventHit: { _id: 'e1' }, eventPhase: phase,
+      });
+      assert.ok(prompt.includes('至少一条要自然体现'), `${dateStr}（${phase.phase}）应为必含强提示`);
+      assert.ok(!prompt.includes('最多提及一次时间语境'), `${dateStr} 不应保留软提示措辞`);
+    }
+  });
+
+  test('preview 里程碑档（T-30）：维持软提示，不强制必含', () => {
+    const phase = dc.resolveEventPhase(EVENT_ASIAN_GAMES, '2026-08-29');
+    assert.strictEqual(phase.phase, 'preview');
+    const dateContext = dc.getDateContext('2026-08-29', phase, EVENT_ASIAN_GAMES);
+    const prompt = buildSystemPrompt('daily', sourceCareer, 'career', {
+      dateContext, eventHit: { _id: 'e1' }, eventPhase: phase,
+    });
+    assert.ok(prompt.includes('最多提及一次时间语境'), '预热档应保留软提示');
+    assert.ok(!prompt.includes('至少一条要自然体现'), '预热档不应升级为必含');
   });
 
   test('无 dateContext 时不出现时间段', () => {
@@ -311,6 +335,40 @@ describe('inspectGeneratedOutput — ai_flavor 校验接入', () => {
     const output = { lines: ['昨天 99 连胜太强了', '稳住别慌，我们一定能赢下来', '今天也为你加油，好好休息吧'], emoji_caption: 'x' };
     const result = inspectGeneratedOutput(output, EMPTY_SOURCE, { humanize: true });
     assert.strictEqual(result.reason, 'ungrounded_number', '未提供的数据应先拦截');
+  });
+});
+
+describe('collectAnchorNumbers + ungrounded_number 白名单', () => {
+  const EMPTY_SOURCE = { refs: [], promptLines: [] };
+
+  function buildCtx(dateStr) {
+    const phase = dc.resolveEventPhase(EVENT_ASIAN_GAMES, dateStr);
+    const dateContext = dc.getDateContext(dateStr, phase, EVENT_ASIAN_GAMES);
+    return { dateContext, eventHit: { _id: 'e1' }, eventPhase: phase };
+  }
+
+  test('collectAnchorNumbers：含剩余天数与锚点文本中的数字', () => {
+    const numbers = collectAnchorNumbers(buildCtx('2026-08-29')); // T-30 preview
+    assert.ok(numbers.includes('30'), '应包含事件剩余天数 30');
+    const todayNumbers = collectAnchorNumbers(buildCtx('2026-09-28')); // T0
+    assert.ok(todayNumbers.includes('0'), '应包含剩余天数 0');
+    assert.ok(todayNumbers.includes('9') && todayNumbers.includes('28'), '应包含锚点日期 9月28日 的数字');
+  });
+
+  test('倒数文案带天数数字：锚点数字在白名单内放行（回归：此前必被 ungrounded_number 打回）', () => {
+    const ctx = buildCtx('2026-09-21'); // T-7 countdown
+    const output = {
+      lines: ['倒计时 7 天，金牌赛越来越近了，期待你站上亚运赛场', '日常来报到，今天也要好好吃饭好好休息', '翻着你的比赛录像，等你凯旋的那一天'],
+      emoji_caption: '⭐️',
+    };
+    const result = inspectGeneratedOutput(output, EMPTY_SOURCE, { humanize: true, anchorNumbers: collectAnchorNumbers(ctx) });
+    assert.strictEqual(result.ok, true, '倒计时天数应放行');
+  });
+
+  test('无锚点数字时，未提供的数据仍被拦截', () => {
+    const output = { lines: ['昨天 99 连胜太强了', '稳住别慌，我们一定能赢下来', '今天也为你加油，好好休息吧'], emoji_caption: 'x' };
+    const result = inspectGeneratedOutput(output, EMPTY_SOURCE, { humanize: true, anchorNumbers: ['30'] });
+    assert.strictEqual(result.reason, 'ungrounded_number', '白名单外的数字仍应拦截');
   });
 });
 

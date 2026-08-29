@@ -96,7 +96,7 @@ router.post('/', async (req, res) => {
     if (!quota.allowed) return errorResponse(res, 429, 'RATE_LIMITED', '今日应援生成额度已用完', requestId, 86400);
     if (quota.response) return successResponse(res, quota.response, requestId);
 
-    const ctx = { dateContext, eventHit, humanizeEnabled };
+    const ctx = { dateContext, eventHit, eventPhase, humanizeEnabled };
     const generation = await generateValidatedOutput({ mood, text, source, requestId, mode: dataMode, ctx });
     if (!generation.ok) {
       await markReceipt(quota.receiptId, 'failed');
@@ -184,6 +184,7 @@ async function generateValidatedOutput({ mood, text, source, requestId, mode, ct
 
     const validation = inspectGeneratedOutput(parseGeneratedText(result && result.text), source, {
       humanize: !ctx || ctx.humanizeEnabled !== false,
+      anchorNumbers: collectAnchorNumbers(ctx),
     });
     console.log('[ai-cheer] model completed', { requestId, attempt, totalTokens: result?.usage?.total_tokens });
     if (validation.ok) return { ok: true, output: validation.output };
@@ -312,6 +313,12 @@ const DATE_CONTEXT_HINT = `
 可以自然地融入节气/节日氛围或今日赛事，但每条文案最多提及一次时间语境，不要为了塞日期破坏口语感，也不要写成天气预报或赛事播报。
 `;
 
+// 倒数/临场/当天档强提示：赛事语境从「可选」升级为「必含」（三条中至少一条）
+const EVENT_STRONG_HINT = `
+今日赛事是本次文案的核心素材：三条文案中至少一条要自然体现这一赛事语境（倒计时、临场期待或当日应援均可），
+倒计时可以直接使用今日背景中给出的天数；其余文案保持日常陪伴感，不要三条都写赛事。
+`;
+
 function buildSystemPrompt(mood, source, mode = 'season', ctx = {}) {
   const isOffseason = mode === 'career' || mode === 'emotion';
   const moodPrompts = isOffseason ? MOOD_PROMPTS_OFFSEASON : MOOD_PROMPTS;
@@ -322,8 +329,12 @@ function buildSystemPrompt(mood, source, mode = 'season', ctx = {}) {
   }
   if (ctx.humanizeEnabled !== false) parts.push(HUMANIZE_GUIDE);
   if (ctx.dateContext) {
+    // 倒数/临场/当天档赛事为必含素材；预热 preview 档（含里程碑日）维持软提示
+    const strongEvent = Boolean(
+      ctx.eventHit && ctx.eventPhase && ['countdown', 'eve', 'today'].includes(ctx.eventPhase.phase)
+    );
     parts.push(
-      `今日背景：${ctx.dateContext.dateLabel}，${ctx.dateContext.anchors.map((a) => a.text).join('；')}\n${DATE_CONTEXT_HINT}`
+      `今日背景：${ctx.dateContext.dateLabel}，${ctx.dateContext.anchors.map((a) => a.text).join('；')}\n${strongEvent ? EVENT_STRONG_HINT : DATE_CONTEXT_HINT}`
     );
   }
   parts.push(`语气：${moodPrompts[mood]}`);
@@ -363,6 +374,9 @@ function inspectGeneratedOutput(output, source, opts = {}) {
     return { ok: false, kind: 'invalid_output', reason: 'line_length', lineLengths };
   }
   const allowedNumbers = new Set(source.refs.flatMap((ref) => String(ref.value).match(/\d+(?:\.\d+)?%?/gu) || []));
+  // 今日背景锚点（节气/节日/赛事）注入的数字同样视为可引用：
+  // 否则 prompt 鼓励的"还有 N 天"倒计时会因 N 不在 refs 里被 ungrounded_number 打回
+  for (const number of opts.anchorNumbers || []) allowedNumbers.add(number);
   const unexpectedNumbers = [];
   for (const line of output.lines) {
     const numbers = line.match(/\d+(?:\.\d+)?%?/gu) || [];
@@ -383,6 +397,23 @@ function inspectGeneratedOutput(output, source, opts = {}) {
     return { ok: false, kind: 'blocked_content', reason: 'blocked_term' };
   }
   return { ok: true, output: safeOutput };
+}
+
+/**
+ * 收集今日背景锚点（节气/节日/赛事）注入 prompt 的数字 + 事件剩余天数，
+ * 供 ungrounded_number 校验纳入白名单。
+ */
+function collectAnchorNumbers(ctx) {
+  const numbers = new Set();
+  if (ctx && ctx.eventPhase) numbers.add(String(ctx.eventPhase.daysUntil));
+  if (ctx && ctx.dateContext && Array.isArray(ctx.dateContext.anchors)) {
+    for (const anchor of ctx.dateContext.anchors) {
+      for (const number of String(anchor.text || '').match(/\d+(?:\.\d+)?%?/gu) || []) {
+        numbers.add(number);
+      }
+    }
+  }
+  return [...numbers];
 }
 
 // ── 反 AI 味量化规则（humanize）──
@@ -542,5 +573,6 @@ module.exports.__test = {
   parseGeneratedText,
   inspectGeneratedOutput,
   checkAiFlavor,
+  collectAnchorNumbers,
   getLatestOverview,
 };

@@ -34,6 +34,7 @@ const {
   buildUserPrompt,
   parseGeneratedText,
   inspectGeneratedOutput,
+  collectAnchorNumbers,
   getLatestOverview,
 } = cheerExports.__test || cheerExports;
 
@@ -132,7 +133,7 @@ async function main() {
   if (options.dateContext) {
     dateContext = getDateContext(todayStr, eventPhase, eventHit, null);
   }
-  const ctx = { dateContext, eventHit, humanizeEnabled: options.humanize };
+  const ctx = { dateContext, eventHit, eventPhase, humanizeEnabled: options.humanize };
 
   if (options.date) console.log(`模拟日期：${todayStr}`);
   if (eventHit) console.log(`命中事件：${eventHit.title}（${eventPhase.phase}，剩 ${eventPhase.daysUntil} 天）`);
@@ -183,7 +184,10 @@ async function main() {
       continue;
     }
 
-    const validation = inspectGeneratedOutput(parsed, source, { humanize: options.humanize });
+    const validation = inspectGeneratedOutput(parsed, source, {
+      humanize: options.humanize,
+      anchorNumbers: collectAnchorNumbers(ctx),
+    });
     if (!validation.ok) {
       console.log(`\n[${options.mood} ${index}] ❌ 校验未通过 (${validation.reason})`);
       console.log(`原始输出：${JSON.stringify(parsed, null, 2)}`);
