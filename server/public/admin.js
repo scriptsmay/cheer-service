@@ -119,6 +119,137 @@ async function testAI() {
   }
 }
 
+// ── 获取模型列表（编辑表单内下拉选择，需求 1b / 1c）──
+let fetchedModelsCache = []; // 会话内按输入端点缓存；端点或 key 改变时失效
+let isFetchingModels = false;
+
+async function fetchModelList() {
+  if (isFetchingModels) return;
+  const url = document.getElementById('inpUrl').value.trim();
+  const key = document.getElementById('inpKey').value.trim();
+  const resEl = document.getElementById('modelFetchResult');
+  const btn = document.getElementById('fetchModelsBtn');
+  const cacheKey = url || '(current)';
+  const cached = fetchedModelsCache.find((x) => x.endpoint === cacheKey);
+  if (cached) {
+    renderModelPicker(cached.models);
+    resEl.textContent = '已使用缓存的 ' + cached.models.length + ' 个模型';
+    return;
+  }
+
+  isFetchingModels = true;
+  const original = btn.innerHTML;
+  btn.innerHTML = '⏳ 获取中…';
+  btn.disabled = true;
+  resEl.textContent = '';
+  hideModelPicker();
+
+  try {
+    const r = await api('POST', API + '/models', {
+      baseUrl: url || undefined,
+      apiKey: key || undefined,
+    });
+    if (!r) return; // 401 已跳转
+    const d = await r.json();
+    if (d.ok && d.models && d.models.length) {
+      fetchedModelsCache = [{ endpoint: cacheKey, models: d.models }]
+        .concat(fetchedModelsCache.filter((x) => x.endpoint !== cacheKey));
+      renderModelPicker(d.models);
+      resEl.textContent = '已获取 ' + d.models.length + ' 个模型（点击选择，也可手动输入）';
+    } else {
+      resEl.textContent = '未获取到模型，请手动填写：' + (d.error || '未知错误');
+      hideModelPicker();
+    }
+  } catch (e) {
+    resEl.textContent = '请求失败：' + e.message;
+  } finally {
+    isFetchingModels = false;
+    btn.innerHTML = original;
+    btn.disabled = false;
+  }
+}
+
+function renderModelPicker(models) {
+  const box = document.getElementById('modelPicker');
+  box.innerHTML = models
+    .map((m) => '<div class="model-picker__item" role="option" onclick="pickModel(\'' + escapeJsString(m) + '\')">' + escapeHtml(m) + '</div>')
+    .join('');
+  box.classList.remove('hidden');
+}
+
+function pickModel(id) {
+  document.getElementById('inpModel').value = id;
+  hideModelPicker();
+}
+
+function hideModelPicker() {
+  document.getElementById('modelPicker').classList.add('hidden');
+}
+
+// ── 当前配置卡片直接改模型（需求 1a）──
+let isFetchingCurrentModels = false;
+
+async function fetchModelsForCurrent() {
+  if (isFetchingCurrentModels) return;
+  const resEl = document.getElementById('curModelFetchResult');
+  isFetchingCurrentModels = true;
+  resEl.textContent = '⏳ 获取中…';
+  hideCurrentModelPicker();
+  try {
+    const r = await api('POST', API + '/models', {}); // 不带 baseUrl/key → 回退已保存配置
+    if (!r) return;
+    const d = await r.json();
+    if (d.ok && d.models && d.models.length) {
+      renderCurrentModelPicker(d.models);
+      resEl.textContent = '已获取 ' + d.models.length + ' 个模型（点击选择）';
+    } else {
+      resEl.textContent = '当前端点未获取到模型，可去下方表单手动填写：' + (d.error || '');
+      hideCurrentModelPicker();
+    }
+  } catch (e) {
+    resEl.textContent = '请求失败：' + e.message;
+  } finally {
+    isFetchingCurrentModels = false;
+  }
+}
+
+function renderCurrentModelPicker(models) {
+  const box = document.getElementById('curModelPicker');
+  box.innerHTML = models
+    .map((m) => '<div class="model-picker__item" role="option" onclick="pickCurrentModel(\'' + escapeJsString(m) + '\')">' + escapeHtml(m) + '</div>')
+    .join('');
+  box.classList.remove('hidden');
+}
+
+async function pickCurrentModel(id) {
+  const r = await api('PUT', API + '/config', { model: id }); // 仅更新 model，立即生效
+  if (!r) return;
+  const d = await r.json();
+  if (d.ok) {
+    hideCurrentModelPicker();
+    document.getElementById('curModelFetchResult').textContent = '已更新为：' + id;
+    refresh();
+  }
+}
+
+function hideCurrentModelPicker() {
+  document.getElementById('curModelPicker').classList.add('hidden');
+}
+
+// 点击外部关闭下拉浮层（编辑表单版 + 当前配置版）
+document.addEventListener('click', (e) => {
+  const box = document.getElementById('modelPicker');
+  const btn = document.getElementById('fetchModelsBtn');
+  if (box && !box.contains(e.target) && e.target !== btn && !(btn && btn.contains(e.target))) {
+    hideModelPicker();
+  }
+  const curBox = document.getElementById('curModelPicker');
+  const curBtn = e.target.closest && e.target.closest('[onclick="fetchModelsForCurrent()"]');
+  if (curBox && !curBox.contains(e.target) && !curBtn) {
+    hideCurrentModelPicker();
+  }
+});
+
 // ── 刷新采集状态 ──
 async function refreshSyncStatus() {
   const el = document.getElementById('syncStatus');

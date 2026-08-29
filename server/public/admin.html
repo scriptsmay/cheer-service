@@ -61,6 +61,11 @@
             <div>Model: <strong id="curModel">-</strong></div>
             <div>API Key: <strong id="curKey">-</strong></div>
           </div>
+          <button type="button" class="btn btn-sm mt8" onclick="fetchModelsForCurrent()">
+            🔄 用当前端点获取模型
+          </button>
+          <div id="curModelPicker" class="model-picker hidden" role="listbox"></div>
+          <div id="curModelFetchResult" class="field-hint"></div>
         </div>
 
         <!-- 修改配置 -->
@@ -76,7 +81,20 @@
           </div>
           <div class="form-group">
             <label>Model</label>
-            <input id="inpModel" placeholder="deepseek-chat" />
+            <div class="model-input-row">
+              <input id="inpModel" placeholder="deepseek-chat（可手动填写，或点右侧获取）" />
+              <button
+                type="button"
+                class="btn btn-sm"
+                id="fetchModelsBtn"
+                onclick="fetchModelList()"
+              >
+                🔄 获取模型列表
+              </button>
+            </div>
+            <!-- 下拉浮层：默认隐藏，fetch 成功后显示 -->
+            <div id="modelPicker" class="model-picker hidden" role="listbox"></div>
+            <div id="modelFetchResult" class="field-hint"></div>
           </div>
           <div class="btn-row">
             <button class="btn btn-primary" onclick="saveConfig()">

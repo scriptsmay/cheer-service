@@ -6,6 +6,7 @@
  * GET  /api/admin              — 管理页面 (HTML，含登录表单)
  * GET  /api/admin/ai/config    — 查看当前 AI 配置（脱敏）[需登录]
  * PUT  /api/admin/ai/config    — 更新 AI 配置（持久化到 /app/data/ai-config.json）[需登录]
+ * POST /api/admin/ai/models    — 拉取可用模型列表（OpenAI /models 约定）[需登录]
  * POST /api/admin/ai/test      — 测试 AI 连通性 [需登录]
  * POST /api/admin/sync/overview — 接收赛季概览数据（kpl-data-daily 推送）[API Key]
  * POST /api/admin/sync/schedule — 接收赛程数据（kpl-data-daily 推送）[API Key]
@@ -14,6 +15,7 @@
 const express = require('express');
 const router = express.Router();
 const { getEffectiveConfig, saveConfig } = require('../services/ai-config');
+const { fetchAvailableModels } = require('../services/ai-models');
 const {
   getCheerSettings,
   setCheerSettings,
@@ -374,6 +376,22 @@ router.put('/ai/config', requireAuth, (req, res) => {
     res.json({ ok: true, message: '配置已保存，立即生效' });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── 拉取可用模型列表（需登录）──
+// 入参 {baseUrl?, apiKey?} 缺省时回退到当前生效配置（支持只配了 endpoint、未重填 key 的场景）
+router.post('/ai/models', requireAuth, async (req, res) => {
+  const { baseUrl, apiKey } = req.body || {};
+  try {
+    const result = await fetchAvailableModels({ baseUrl, apiKey });
+    if (result.ok) return res.json(result);
+    return res.status(502).json({ ok: false, error: result.error, endpoint: result.endpoint });
+  } catch (e) {
+    if (['NO_KEY', 'NO_BASE_URL', 'INVALID_URL', 'SSRF_BLOCKED', 'KEY_REQUIRED_FOR_NEW_ENDPOINT'].includes(e.code)) {
+      return res.status(400).json({ ok: false, error: e.message });
+    }
+    return res.status(502).json({ ok: false, error: e.message });
   }
 });
 
