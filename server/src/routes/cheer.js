@@ -21,7 +21,10 @@ const {
 } = require('../utils/helpers');
 const config = require('../config/env');
 
-const MAX_GENERATION_ATTEMPTS = 2;
+// 单次生成条数（单一事实来源：prompt / 校验 / 重试文案均由此动态拼装）
+const CHEER_LINE_COUNT = 5;
+// 条数变多后触发校验重试的概率上升，多一次重试换生成成功率
+const MAX_GENERATION_ATTEMPTS = 3;
 const ALLOWED_MOODS = new Set(['victory', 'low', 'daily', 'hope']);
 const MOOD_ALIASES = { eager: 'hope' };
 const MOOD_PROMPTS = {
@@ -267,10 +270,10 @@ const DEFAULT_PROMPT = `
 
 多条文案要从不同角度表达期待、鼓励、陪伴、认可或热血感，句式和开头不能雷同。避免套话、口号堆叠、连续感叹号，以及每句都称呼选手或粉丝群体。
 
-只允许引用下方"可引用数据"中明确提供的具体数字、百分比和英雄名；没有提供的数据不得猜测或补充。数据按语境自然选用即可，不要为了塞数据牺牲口语感。三条文案中最多两条引用数据，至少一条完全不引用数据、只表达自然情绪。
+只允许引用下方"可引用数据"中明确提供的具体数字、百分比和英雄名；没有提供的数据不得猜测或补充。数据按语境自然选用即可，不要为了塞数据牺牲口语感。五条文案中最多三条引用数据，至少两条完全不引用数据、只表达自然情绪。
 所有数字必须使用阿拉伯数字（如 4.29、56.7%、28局），禁止使用中文数字（如四點二九、五十六点七、二十八局）。
 
-必须输出 3 条中文短句，每条建议 30 至 50 字且不得少于 10 字；另输出一句简短的 emoji_caption。emoji_caption 也要自然，不要复述短句。
+必须输出 5 条中文短句，每条建议 30 至 50 字且不得少于 10 字；另输出一句简短的 emoji_caption。emoji_caption 也要自然，不要复述短句。
 
 不得使用传统球类运动词汇，不得声称单场 MVP、本周表现或未提供的赛程结果。
 
@@ -303,8 +306,9 @@ const OFFSEASON_CONSTRAINT_ASIAN_GAMES = `
 `;
 
 // 反 AI 味指南：写入 system prompt 的「禁止清单」（可通过 cheer_settings.humanize_enabled 关闭）
+// 条数口径由 CHEER_LINE_COUNT 动态拼装，避免条数调整后文案漂移
 const HUMANIZE_GUIDE = `
-避免 AI 腔：禁止排比三连句式（"不只是…更是…"）、禁止连续感叹号（最多一个）、禁止抽象词堆叠（梦想/热爱/永远/信念 每词整次输出最多一次）、禁止三句同构（三条句式开头雷同）、禁止口号式收尾（每句都是正能量总结）。
+避免 AI 腔：禁止排比三连句式（"不只是…更是…"）、禁止连续感叹号（最多一个）、禁止抽象词堆叠（梦想/热爱/永远/信念 每词整次输出最多一次）、禁止句式同构（${CHEER_LINE_COUNT} 条文案开头雷同）、禁止口号式收尾（每句都是正能量总结）。
 像粉丝真的在打字：有停顿、有细节、允许一点点随意，不要每句都像精心设计的金句。
 `;
 
@@ -313,10 +317,10 @@ const DATE_CONTEXT_HINT = `
 可以自然地融入节气/节日氛围或今日赛事，但每条文案最多提及一次时间语境，不要为了塞日期破坏口语感，也不要写成天气预报或赛事播报。
 `;
 
-// 倒数/临场/当天档强提示：赛事语境从「可选」升级为「必含」（三条中至少一条）
+// 倒数/临场/当天档强提示：赛事语境从「可选」升级为「必含」（条数口径动态拼装）
 const EVENT_STRONG_HINT = `
-今日赛事是本次文案的核心素材：三条文案中至少一条要自然体现这一赛事语境（倒计时、临场期待或当日应援均可），
-倒计时可以直接使用今日背景中给出的天数；其余文案保持日常陪伴感，不要三条都写赛事。
+今日赛事是本次文案的核心素材：${CHEER_LINE_COUNT} 条文案中至少一条要自然体现这一赛事语境（倒计时、临场期待或当日应援均可），
+倒计时可以直接使用今日背景中给出的天数；其余文案保持日常陪伴感，不要每条都写赛事。
 `;
 
 function buildSystemPrompt(mood, source, mode = 'season', ctx = {}) {
@@ -339,7 +343,8 @@ function buildSystemPrompt(mood, source, mode = 'season', ctx = {}) {
   }
   parts.push(`语气：${moodPrompts[mood]}`);
   parts.push(`可引用数据：${source.promptLines.length ? source.promptLines.join('；') : '无，生成纯情绪应援文案'}`);
-  parts.push('只输出合法 JSON，lines 必须恰好包含 3 个字符串：{"lines":["文案1","文案2","文案3"],"emoji_caption":"配文"}');
+  const jsonExample = `{"lines":[${Array.from({ length: CHEER_LINE_COUNT }, (_, i) => `"文案${i + 1}"`).join(',')}],"emoji_caption":"配文"}`;
+  parts.push(`只输出合法 JSON，lines 必须恰好包含 ${CHEER_LINE_COUNT} 个字符串：${jsonExample}`);
   return parts.join('\n');
 }
 
@@ -366,7 +371,7 @@ function parseGeneratedText(text) {
 }
 
 function inspectGeneratedOutput(output, source, opts = {}) {
-  if (!output || !Array.isArray(output.lines) || output.lines.length !== 3) {
+  if (!output || !Array.isArray(output.lines) || output.lines.length !== CHEER_LINE_COUNT) {
     return { ok: false, kind: 'invalid_output', reason: 'line_count' };
   }
   const lineLengths = output.lines.map(textLength);
@@ -432,23 +437,23 @@ function checkAiFlavor(lines) {
   if (/!{2,}/u.test(all) || /！{2,}/u.test(all)) {
     return { rule: 'double_exclamation', detail: '连续感叹号' };
   }
-  // 2. 感叹号密度（3 条合计 > 3 个）
+  // 2. 感叹号密度（按条数等比放宽：CHEER_LINE_COUNT 条合计 > CHEER_LINE_COUNT 个拒绝）
   const exCount = (all.match(/!|！/gu) || []).length;
-  if (exCount > 3) {
+  if (exCount > CHEER_LINE_COUNT) {
     return { rule: 'exclamation_density', detail: `感叹号共 ${exCount} 个` };
   }
-  // 3. 句首雷同（3 条首个非标点字符任一组 ≥ 2）
+  // 3. 句首雷同（5 条中 2 条同开头属正常，任一组 ≥ 3 才拒绝）
   const starts = lines.map((l) => l.replace(LEADING_PUNCT, '').slice(0, 1));
   const seen = new Map();
   for (const s of starts) {
     if (!s) continue;
     const n = (seen.get(s) || 0) + 1;
-    if (n >= 2) return { rule: 'same_opening', detail: `句首「${s}」出现 ${n} 次` };
+    if (n >= 3) return { rule: 'same_opening', detail: `句首「${s}」出现 ${n} 次` };
     seen.set(s, n);
   }
-  // 4. 抽象词堆叠（不同抽象词命中 > 3）
+  // 4. 抽象词堆叠（文本变长命中概率上升，不同抽象词命中 > 4 拒）
   const hitTerms = ABSTRACT_TERMS.filter((t) => all.includes(t));
-  if (hitTerms.length > 3) {
+  if (hitTerms.length > 4) {
     return { rule: 'abstract_terms', detail: `抽象词过多：${hitTerms.join('、')}` };
   }
   // 5. 排比三连句式
@@ -460,19 +465,19 @@ function checkAiFlavor(lines) {
 
 function buildRetryInstruction(failure) {
   if (failure.reason === 'line_length') {
-    return `上一次三条文案的字符数分别为 ${failure.lineLengths.join('、')}，请全部重新生成并确保每条至少 10 个字符，建议 30 至 50 个字符。不要解释，只输出指定 JSON。`;
+    return `上一次 ${CHEER_LINE_COUNT} 条文案的字符数分别为 ${failure.lineLengths.join('、')}，请全部重新生成并确保每条至少 10 个字符，建议 30 至 50 个字符。不要解释，只输出指定 JSON。`;
   }
   if (failure.reason === 'ungrounded_number') {
     return '上一次输出包含未提供的数据。请全部重新生成，只能使用"可引用数据"中的数字；不要解释，只输出指定 JSON。';
   }
   if (failure.reason === 'ai_flavor') {
     const detail = (failure.ai && failure.ai.detail) || '句式雷同/口号化';
-    return `上一次文案有 AI 腔（${detail}）。请全部重新生成：拆散句式、减少感叹号、让三条文案的角度和开头都不一样、去掉口号式总结；不要解释，只输出指定 JSON。`;
+    return `上一次文案有 AI 腔（${detail}）。请全部重新生成：拆散句式、减少感叹号、让 ${CHEER_LINE_COUNT} 条文案的角度和开头都不一样、去掉口号式总结；不要解释，只输出指定 JSON。`;
   }
   if (failure.kind === 'blocked_content') {
     return '上一次输出未通过内容安全检查。请全部重新生成正常、积极的粉丝应援文案；不要解释，只输出指定 JSON。';
   }
-  return '上一次输出格式不符合要求。请全部重新生成恰好 3 条、每条至少 10 个字符的文案；不要解释，只输出指定 JSON。';
+  return `上一次输出格式不符合要求。请全部重新生成恰好 ${CHEER_LINE_COUNT} 条、每条至少 10 个字符的文案；不要解释，只输出指定 JSON。`;
 }
 
 async function consumeAiQuota({ subjectId, ipHash, requestId, date }) {
@@ -567,9 +572,11 @@ module.exports = router;
 
 // ── 导出内部函数（供 CLI 脚本复用）──
 module.exports.__test = {
+  CHEER_LINE_COUNT,
   buildGroundedSource,
   buildSystemPrompt,
   buildUserPrompt,
+  buildRetryInstruction,
   parseGeneratedText,
   inspectGeneratedOutput,
   checkAiFlavor,

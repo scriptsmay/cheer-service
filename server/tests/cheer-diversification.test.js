@@ -21,7 +21,10 @@ const Module = require('module');
 
 const dc = require('../src/lib/date-context');
 const { __test } = require('../src/routes/cheer');
-const { buildGroundedSource, buildSystemPrompt, inspectGeneratedOutput, checkAiFlavor, collectAnchorNumbers } = __test;
+const {
+  CHEER_LINE_COUNT, buildGroundedSource, buildSystemPrompt, inspectGeneratedOutput,
+  checkAiFlavor, collectAnchorNumbers, buildRetryInstruction,
+} = __test;
 
 // 复刻 cheer-data-mode.test.js 的赛季文档，供 buildGroundedSource 使用
 const OVERVIEW = {
@@ -276,48 +279,115 @@ describe('buildSystemPrompt — 多样性上下文注入', () => {
 // 4. checkAiFlavor / inspectGeneratedOutput：反 AI 味量化规则
 // ════════════════════════════════════════════════════════════════
 
-describe('checkAiFlavor — 反 AI 味规则', () => {
+describe('checkAiFlavor — 反 AI 味规则（5 条基准）', () => {
   test('连续感叹号（半角/全角）', () => {
-    assert.strictEqual(checkAiFlavor(['冲啊！！', '稳住，我们能赢！', '加油！']).rule, 'double_exclamation');
-    assert.strictEqual(checkAiFlavor(['冲啊!!', '稳住，我们能赢!', '加油!']).rule, 'double_exclamation');
+    assert.strictEqual(checkAiFlavor(['冲啊！！', '稳住，我们能赢！', '加油！', '好好休息', '为你欢呼']).rule, 'double_exclamation');
+    assert.strictEqual(checkAiFlavor(['冲啊!!', '稳住，我们能赢!', '加油!', '好好休息', '为你欢呼']).rule, 'double_exclamation');
   });
 
-  test('感叹号密度 > 3（无连续）', () => {
-    const result = checkAiFlavor(['冲啊！稳住！', '我们加油吧！', '相信你！']); // 共 4 个
-    assert.strictEqual(result.rule, 'exclamation_density');
+  test('感叹号边界：5 个放行 / 6 个拒（无连续）', () => {
+    const five = [
+      '冲呀！今天也要元气满满',
+      '稳住别慌我们能赢下来！',
+      '为你欢呼的这一刻太耀眼了！',
+      '翻出旧录像又看了一遍！',
+      '晚饭后去超话转一圈！真惬意',
+    ];
+    assert.strictEqual(checkAiFlavor(five), null, '5 个感叹号应放行');
+    const six = [...five.slice(0, 4), '晚饭后去超话转一圈！真惬意！'];
+    assert.strictEqual(checkAiFlavor(six).rule, 'exclamation_density', '6 个感叹号应拒绝');
   });
 
-  test('句首雷同（首个非标点字符 ≥ 2 相同）', () => {
-    const result = checkAiFlavor(['今天也要加油！', '今天不许丧气', '今天就是最好的一天']);
+  test('句首雷同边界：2 条同开头放行 / 3 条同开头拒', () => {
+    const twoSame = [
+      '今天也要加油呀朋友们',
+      '晨光正好别辜负这时光',
+      '今天不许丧气', // 「今」第 2 次 → 放行
+      '翻出你的旧比赛录像重温',
+      '晚饭吃得好饱有点困了',
+    ];
+    assert.strictEqual(checkAiFlavor(twoSame), null, '2 条同开头应放行');
+    const threeSame = [
+      '今天也要加油呀朋友们',
+      '今天不许丧气',
+      '今天就是最好的一天', // 「今」第 3 次 → 拒绝
+      '翻出你的旧比赛录像重温',
+      '晚饭吃得好饱有点困了',
+    ];
+    const result = checkAiFlavor(threeSame);
     assert.strictEqual(result.rule, 'same_opening');
     assert.ok(result.detail.includes('今'));
   });
 
-  test('抽象词堆叠（不同抽象词命中 > 3）', () => {
-    const result = checkAiFlavor(['梦想与热爱，永远相信', '信念不会改变', '永远坚持梦想', '热爱可抵岁月漫长']);
+  test('抽象词边界：4 个不同抽象词放行 / 5 个拒', () => {
+    const four = [
+      '梦想还是要有的万一实现了',
+      '热爱可抵岁月漫长',
+      '信念这东西真的很奇妙',
+      '永远支持你到底',
+      '晚饭吃得好饱有点困了',
+    ];
+    assert.strictEqual(checkAiFlavor(four), null, '4 个抽象词应放行');
+    const five = [
+      '梦想还是要有的万一实现了',
+      '热爱可抵岁月漫长',
+      '信念这东西真的很奇妙',
+      '永远支持你到底',
+      '这一次一定要全力以赴',
+    ];
+    const result = checkAiFlavor(five);
     assert.strictEqual(result.rule, 'abstract_terms');
   });
 
   test('排比三连句式（不只…更 / 既是…又是 / 没有…只有）', () => {
-    assert.strictEqual(checkAiFlavor(['不只是比赛，更是信仰', '为你欢呼', '好好休息']).rule, 'parallel_pattern');
-    assert.strictEqual(checkAiFlavor(['既是对手，又是朋友', '好好休息', '为你欢呼']).rule, 'parallel_pattern');
-    assert.strictEqual(checkAiFlavor(['没有退路，只有前行', '好好休息', '为你欢呼']).rule, 'parallel_pattern');
+    assert.strictEqual(checkAiFlavor(['不只是比赛，更是信仰', '为你欢呼', '好好休息', '翻翻旧录像', '晚饭吃过了']).rule, 'parallel_pattern');
+    assert.strictEqual(checkAiFlavor(['既是对手，又是朋友', '好好休息', '为你欢呼', '翻翻旧录像', '晚饭吃过了']).rule, 'parallel_pattern');
+    assert.strictEqual(checkAiFlavor(['没有退路，只有前行', '好好休息', '为你欢呼', '翻翻旧录像', '晚饭吃过了']).rule, 'parallel_pattern');
   });
 
-  test('自然文案不误伤', () => {
+  test('自然 5 条文案不误伤', () => {
     assert.strictEqual(
-      checkAiFlavor(['昨晚看到你的高光集锦，还是那么秀', '等你回来的每一天都有在认真生活', '今天喝到了好喝的奶茶，突然想到你']),
+      checkAiFlavor([
+        '昨晚看到你的高光集锦，还是那么秀',
+        '等你回来的每一天都有在认真生活',
+        '今天喝到了好喝的奶茶，突然想到你',
+        '翻出去年夏天的比赛录像又看了一遍',
+        '晚饭后散步的时候在超话刷到你的图',
+      ]),
       null
     );
   });
 });
 
-describe('inspectGeneratedOutput — ai_flavor 校验接入', () => {
+describe('inspectGeneratedOutput — 条数与 ai_flavor 校验接入', () => {
   const EMPTY_SOURCE = { refs: [], promptLines: [] };
+  // 可通过全部校验的 5 条自然文案基线
+  const NATURAL_FIVE = [
+    '昨晚看到你的高光集锦，还是那么秀',
+    '等你回来的每一天都有在认真生活',
+    '今天喝到了好喝的奶茶，突然想到你',
+    '翻出去年夏天的比赛录像又看了一遍',
+    '晚饭后散步的时候在超话刷到你的图',
+  ];
+
+  test('恰好 5 条放行；4 条 / 6 条均 line_count 拒绝', () => {
+    const ok = inspectGeneratedOutput({ lines: [...NATURAL_FIVE], emoji_caption: 'x' }, EMPTY_SOURCE, { humanize: true });
+    assert.strictEqual(ok.ok, true, '5 条应放行');
+    assert.strictEqual(ok.output.lines.length, CHEER_LINE_COUNT);
+    for (const n of [4, 6]) {
+      const lines = n === 4 ? NATURAL_FIVE.slice(0, 4) : [...NATURAL_FIVE, '补一条凑数的文案而已呀'];
+      const result = inspectGeneratedOutput({ lines, emoji_caption: 'x' }, EMPTY_SOURCE, { humanize: true });
+      assert.strictEqual(result.ok, false, `${n} 条应拒绝`);
+      assert.strictEqual(result.reason, 'line_count');
+    }
+  });
 
   test('AI 腔命中 → reason:ai_flavor（放在内容安全校验之前）', () => {
     // 每条均 ≥10 字符，确保不会被 line_length 前置拦截
-    const output = { lines: ['我们一定要冲啊！！冲上巅峰', '稳住别慌，我们一定能赢下来', '今天也为你加油，好好休息'], emoji_caption: 'x' };
+    const output = {
+      lines: ['我们一定要冲啊！！冲上巅峰', '稳住别慌，我们一定能赢下来', '今天也为你加油，好好休息', '翻出旧录像又看了一遍呀', '晚饭后去超话转了一圈呢'],
+      emoji_caption: 'x',
+    };
     const result = inspectGeneratedOutput(output, EMPTY_SOURCE, { humanize: true });
     assert.strictEqual(result.ok, false);
     assert.strictEqual(result.kind, 'invalid_output');
@@ -326,15 +396,45 @@ describe('inspectGeneratedOutput — ai_flavor 校验接入', () => {
   });
 
   test('humanize:false 时跳过 AI 味校验', () => {
-    const output = { lines: ['我们一定要冲啊！！冲上巅峰', '稳住别慌，我们一定能赢下来', '今天也为你加油，好好休息'], emoji_caption: 'x' };
+    const output = {
+      lines: ['我们一定要冲啊！！冲上巅峰', '稳住别慌，我们一定能赢下来', '今天也为你加油，好好休息', '翻出旧录像又看了一遍呀', '晚饭后去超话转了一圈呢'],
+      emoji_caption: 'x',
+    };
     const result = inspectGeneratedOutput(output, EMPTY_SOURCE, { humanize: false });
     assert.strictEqual(result.ok, true, '关闭校验后 AI 腔文案应放行');
   });
 
   test('数据不实校验优先于 AI 味校验', () => {
-    const output = { lines: ['昨天 99 连胜太强了', '稳住别慌，我们一定能赢下来', '今天也为你加油，好好休息吧'], emoji_caption: 'x' };
+    const output = {
+      lines: ['昨天 99 连胜太强了', '稳住别慌，我们一定能赢下来', '今天也为你加油，好好休息吧', '翻出旧录像又看了一遍呀', '晚饭后去超话转了一圈呢'],
+      emoji_caption: 'x',
+    };
     const result = inspectGeneratedOutput(output, EMPTY_SOURCE, { humanize: true });
     assert.strictEqual(result.reason, 'ungrounded_number', '未提供的数据应先拦截');
+  });
+});
+
+describe('CHEER_LINE_COUNT 与 prompt / 重试文案一致性', () => {
+  const sourceCareer = buildGroundedSource(OVERVIEW, 'career');
+
+  test('常量值为 5', () => {
+    assert.strictEqual(CHEER_LINE_COUNT, 5);
+  });
+
+  test('system prompt 条数口径与常量一致', () => {
+    const prompt = buildSystemPrompt('daily', sourceCareer, 'career', {});
+    assert.ok(prompt.includes(`必须输出 ${CHEER_LINE_COUNT} 条中文短句`), '条数指令应与常量一致');
+    assert.ok(prompt.includes(`恰好包含 ${CHEER_LINE_COUNT} 个字符串`), 'JSON 指令应与常量一致');
+    assert.ok(prompt.includes(`${CHEER_LINE_COUNT} 条文案开头雷同`), 'humanize 指南条数应与常量一致');
+    assert.ok(!prompt.includes('必须输出 3 条'), '不应残留 3 条口径');
+  });
+
+  test('重试提示条数口径与常量一致', () => {
+    const lineLengths = Array.from({ length: CHEER_LINE_COUNT }, () => 12);
+    assert.ok(buildRetryInstruction({ reason: 'line_length', lineLengths }).includes(`${CHEER_LINE_COUNT} 条文案的字符数`));
+    assert.ok(buildRetryInstruction({ reason: 'ai_flavor', ai: { detail: '句式雷同' } }).includes(`让 ${CHEER_LINE_COUNT} 条文案`));
+    assert.ok(buildRetryInstruction({}).includes(`恰好 ${CHEER_LINE_COUNT} 条`));
+    assert.ok(!buildRetryInstruction({}).includes('恰好 3 条'), '不应残留 3 条口径');
   });
 });
 
@@ -350,15 +450,28 @@ describe('collectAnchorNumbers + ungrounded_number 白名单', () => {
   test('collectAnchorNumbers：含剩余天数与锚点文本中的数字', () => {
     const numbers = collectAnchorNumbers(buildCtx('2026-08-29')); // T-30 preview
     assert.ok(numbers.includes('30'), '应包含事件剩余天数 30');
-    const todayNumbers = collectAnchorNumbers(buildCtx('2026-09-28')); // T0
+    const todayCtx = buildCtx('2026-09-28'); // T0
+    const todayNumbers = collectAnchorNumbers(todayCtx);
     assert.ok(todayNumbers.includes('0'), '应包含剩余天数 0');
-    assert.ok(todayNumbers.includes('9') && todayNumbers.includes('28'), '应包含锚点日期 9月28日 的数字');
+    // 事件当天模板随机选择，锚点文本不一定含日期数字（如"就是今天！{title}"），
+    // 因此不硬编码断言"9"/"28"，改为校验锚点文本中出现的数字全部被收集
+    const anchorNumbers = todayCtx.dateContext.anchors
+      .flatMap((a) => String(a.text || '').match(/\d+(?:\.\d+)?%?/gu) || []);
+    for (const n of anchorNumbers) {
+      assert.ok(todayNumbers.includes(n), `锚点文本中的数字 ${n} 应被收集`);
+    }
   });
 
   test('倒数文案带天数数字：锚点数字在白名单内放行（回归：此前必被 ungrounded_number 打回）', () => {
     const ctx = buildCtx('2026-09-21'); // T-7 countdown
     const output = {
-      lines: ['倒计时 7 天，金牌赛越来越近了，期待你站上亚运赛场', '日常来报到，今天也要好好吃饭好好休息', '翻着你的比赛录像，等你凯旋的那一天'],
+      lines: [
+        '倒计时 7 天，金牌赛越来越近了，期待你站上亚运赛场',
+        '日常来报到，今天也要好好吃饭好好休息',
+        '翻着你的比赛录像，等你凯旋的那一天',
+        '晚饭后刷到了你的采访片段，笑得很开心',
+        '早睡早起，养足精神迎接每一天',
+      ],
       emoji_caption: '⭐️',
     };
     const result = inspectGeneratedOutput(output, EMPTY_SOURCE, { humanize: true, anchorNumbers: collectAnchorNumbers(ctx) });
@@ -366,7 +479,10 @@ describe('collectAnchorNumbers + ungrounded_number 白名单', () => {
   });
 
   test('无锚点数字时，未提供的数据仍被拦截', () => {
-    const output = { lines: ['昨天 99 连胜太强了', '稳住别慌，我们一定能赢下来', '今天也为你加油，好好休息吧'], emoji_caption: 'x' };
+    const output = {
+      lines: ['昨天 99 连胜太强了', '稳住别慌，我们一定能赢下来', '今天也为你加油，好好休息吧', '翻出旧录像又看了一遍呀', '晚饭后去超话转了一圈呢'],
+      emoji_caption: 'x',
+    };
     const result = inspectGeneratedOutput(output, EMPTY_SOURCE, { humanize: true, anchorNumbers: ['30'] });
     assert.strictEqual(result.reason, 'ungrounded_number', '白名单外的数字仍应拦截');
   });
