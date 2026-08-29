@@ -22,8 +22,8 @@ const Module = require('module');
 const dc = require('../src/lib/date-context');
 const { __test } = require('../src/routes/cheer');
 const {
-  CHEER_LINE_COUNT, buildGroundedSource, buildSystemPrompt, inspectGeneratedOutput,
-  checkAiFlavor, collectAnchorNumbers, buildRetryInstruction,
+  CHEER_LINE_COUNT, CHEER_LINE_MIN_CHARS, buildGroundedSource, buildSystemPrompt,
+  inspectGeneratedOutput, checkAiFlavor, collectAnchorNumbers, buildRetryInstruction,
 } = __test;
 
 // 复刻 cheer-data-mode.test.js 的赛季文档，供 buildGroundedSource 使用
@@ -417,8 +417,9 @@ describe('inspectGeneratedOutput — 条数与 ai_flavor 校验接入', () => {
 describe('CHEER_LINE_COUNT 与 prompt / 重试文案一致性', () => {
   const sourceCareer = buildGroundedSource(OVERVIEW, 'career');
 
-  test('常量值为 5', () => {
+  test('常量值为 5 / 字数下限为 20', () => {
     assert.strictEqual(CHEER_LINE_COUNT, 5);
+    assert.strictEqual(CHEER_LINE_MIN_CHARS, 20);
   });
 
   test('system prompt 条数口径与常量一致', () => {
@@ -429,12 +430,24 @@ describe('CHEER_LINE_COUNT 与 prompt / 重试文案一致性', () => {
     assert.ok(!prompt.includes('必须输出 3 条'), '不应残留 3 条口径');
   });
 
-  test('重试提示条数口径与常量一致', () => {
+  test('system prompt 字数下限口径与常量一致（防每条变短的压缩行为）', () => {
+    const prompt = buildSystemPrompt('daily', sourceCareer, 'career', {});
+    assert.ok(prompt.includes(`每条必须不少于 ${CHEER_LINE_MIN_CHARS} 个字`), '正文字数下限应与常量一致');
+    assert.ok(prompt.includes(`每条不少于 ${CHEER_LINE_MIN_CHARS} 个字`), 'JSON 指令行应重复字数下限');
+    assert.ok(!prompt.includes('不得少于 10 字'), '不应残留 10 字下限');
+  });
+
+  test('重试提示条数与字数口径与常量一致', () => {
     const lineLengths = Array.from({ length: CHEER_LINE_COUNT }, () => 12);
-    assert.ok(buildRetryInstruction({ reason: 'line_length', lineLengths }).includes(`${CHEER_LINE_COUNT} 条文案的字符数`));
+    const retryLen = buildRetryInstruction({ reason: 'line_length', lineLengths });
+    assert.ok(retryLen.includes(`${CHEER_LINE_COUNT} 条文案的字符数`));
+    assert.ok(retryLen.includes(`每条不少于 ${CHEER_LINE_MIN_CHARS} 个字`), 'line_length 重试应带 20 字下限');
     assert.ok(buildRetryInstruction({ reason: 'ai_flavor', ai: { detail: '句式雷同' } }).includes(`让 ${CHEER_LINE_COUNT} 条文案`));
-    assert.ok(buildRetryInstruction({}).includes(`恰好 ${CHEER_LINE_COUNT} 条`));
-    assert.ok(!buildRetryInstruction({}).includes('恰好 3 条'), '不应残留 3 条口径');
+    const retryDefault = buildRetryInstruction({});
+    assert.ok(retryDefault.includes(`恰好 ${CHEER_LINE_COUNT} 条`));
+    assert.ok(retryDefault.includes(`每条不少于 ${CHEER_LINE_MIN_CHARS} 个字`));
+    assert.ok(!retryDefault.includes('恰好 3 条'), '不应残留 3 条口径');
+    assert.ok(!retryLen.includes('至少 10 个字符'), '不应残留 10 字口径');
   });
 });
 

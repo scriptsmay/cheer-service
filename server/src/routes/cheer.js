@@ -23,6 +23,8 @@ const config = require('../config/env');
 
 // 单次生成条数（单一事实来源：prompt / 校验 / 重试文案均由此动态拼装）
 const CHEER_LINE_COUNT = 5;
+// 每条字数硬下限（prompt 锚点；校验层 line_length 仍以 10 字兜底，不新增拒绝路径）
+const CHEER_LINE_MIN_CHARS = 20;
 // 条数变多后触发校验重试的概率上升，多一次重试换生成成功率
 const MAX_GENERATION_ATTEMPTS = 3;
 const ALLOWED_MOODS = new Set(['victory', 'low', 'daily', 'hope']);
@@ -273,7 +275,7 @@ const DEFAULT_PROMPT = `
 只允许引用下方"可引用数据"中明确提供的具体数字、百分比和英雄名；没有提供的数据不得猜测或补充。数据按语境自然选用即可，不要为了塞数据牺牲口语感。五条文案中最多三条引用数据，至少两条完全不引用数据、只表达自然情绪。
 所有数字必须使用阿拉伯数字（如 4.29、56.7%、28局），禁止使用中文数字（如四點二九、五十六点七、二十八局）。
 
-必须输出 5 条中文短句，每条建议 30 至 50 字且不得少于 10 字；另输出一句简短的 emoji_caption。emoji_caption 也要自然，不要复述短句。
+必须输出 ${CHEER_LINE_COUNT} 条中文短句，每条必须不少于 ${CHEER_LINE_MIN_CHARS} 个字，并尽量写到 30 至 50 字；另输出一句简短的 emoji_caption。emoji_caption 也要自然，不要复述短句。
 
 不得使用传统球类运动词汇，不得声称单场 MVP、本周表现或未提供的赛程结果。
 
@@ -344,7 +346,8 @@ function buildSystemPrompt(mood, source, mode = 'season', ctx = {}) {
   parts.push(`语气：${moodPrompts[mood]}`);
   parts.push(`可引用数据：${source.promptLines.length ? source.promptLines.join('；') : '无，生成纯情绪应援文案'}`);
   const jsonExample = `{"lines":[${Array.from({ length: CHEER_LINE_COUNT }, (_, i) => `"文案${i + 1}"`).join(',')}],"emoji_caption":"配文"}`;
-  parts.push(`只输出合法 JSON，lines 必须恰好包含 ${CHEER_LINE_COUNT} 个字符串：${jsonExample}`);
+  // 长度要求写进末尾指令行：模型对靠近输出位置的指令更敏感（扩条数后出现"总量守恒、每条变短"的压缩行为）
+  parts.push(`只输出合法 JSON，lines 必须恰好包含 ${CHEER_LINE_COUNT} 个字符串、每条不少于 ${CHEER_LINE_MIN_CHARS} 个字：${jsonExample}`);
   return parts.join('\n');
 }
 
@@ -465,19 +468,19 @@ function checkAiFlavor(lines) {
 
 function buildRetryInstruction(failure) {
   if (failure.reason === 'line_length') {
-    return `上一次 ${CHEER_LINE_COUNT} 条文案的字符数分别为 ${failure.lineLengths.join('、')}，请全部重新生成并确保每条至少 10 个字符，建议 30 至 50 个字符。不要解释，只输出指定 JSON。`;
+    return `上一次 ${CHEER_LINE_COUNT} 条文案的字符数分别为 ${failure.lineLengths.join('、')}，请全部重新生成并确保每条不少于 ${CHEER_LINE_MIN_CHARS} 个字、尽量写到 30 至 50 个字。不要解释，只输出指定 JSON。`;
   }
   if (failure.reason === 'ungrounded_number') {
     return '上一次输出包含未提供的数据。请全部重新生成，只能使用"可引用数据"中的数字；不要解释，只输出指定 JSON。';
   }
   if (failure.reason === 'ai_flavor') {
     const detail = (failure.ai && failure.ai.detail) || '句式雷同/口号化';
-    return `上一次文案有 AI 腔（${detail}）。请全部重新生成：拆散句式、减少感叹号、让 ${CHEER_LINE_COUNT} 条文案的角度和开头都不一样、去掉口号式总结；不要解释，只输出指定 JSON。`;
+    return `上一次文案有 AI 腔（${detail}）。请全部重新生成：拆散句式、减少感叹号、让 ${CHEER_LINE_COUNT} 条文案的角度和开头都不一样、每条不少于 ${CHEER_LINE_MIN_CHARS} 个字、去掉口号式总结；不要解释，只输出指定 JSON。`;
   }
   if (failure.kind === 'blocked_content') {
     return '上一次输出未通过内容安全检查。请全部重新生成正常、积极的粉丝应援文案；不要解释，只输出指定 JSON。';
   }
-  return `上一次输出格式不符合要求。请全部重新生成恰好 ${CHEER_LINE_COUNT} 条、每条至少 10 个字符的文案；不要解释，只输出指定 JSON。`;
+  return `上一次输出格式不符合要求。请全部重新生成恰好 ${CHEER_LINE_COUNT} 条、每条不少于 ${CHEER_LINE_MIN_CHARS} 个字的文案；不要解释，只输出指定 JSON。`;
 }
 
 async function consumeAiQuota({ subjectId, ipHash, requestId, date }) {
@@ -573,6 +576,7 @@ module.exports = router;
 // ── 导出内部函数（供 CLI 脚本复用）──
 module.exports.__test = {
   CHEER_LINE_COUNT,
+  CHEER_LINE_MIN_CHARS,
   buildGroundedSource,
   buildSystemPrompt,
   buildUserPrompt,
