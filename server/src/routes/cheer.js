@@ -14,6 +14,7 @@ const { successResponse, errorResponse } = require('../services/response');
 const { isContentBlocked } = require('../lib/ai-utils');
 const { getCheerSettings, getActiveEventsForDate } = require('../services/settings-store');
 const { getDateContext } = require('../lib/date-context');
+const { renderTemplate, DEFAULT_PROMPTS } = require('../lib/prompt-template');
 const {
   getRequestId, getClientIp, shanghaiDate, normalizeClientId,
   isValidClientId, normalizeRequestId, hashValue, formatRate,
@@ -101,7 +102,7 @@ router.post('/', async (req, res) => {
     if (!quota.allowed) return errorResponse(res, 429, 'RATE_LIMITED', '今日应援生成额度已用完', requestId, 86400);
     if (quota.response) return successResponse(res, quota.response, requestId);
 
-    const ctx = { dateContext, eventHit, eventPhase, humanizeEnabled };
+    const ctx = { dateContext, eventHit, eventPhase, humanizeEnabled, prompts: settings.prompts };
     const generation = await generateValidatedOutput({ mood, text, source, requestId, mode: dataMode, ctx });
     if (!generation.ok) {
       await markReceipt(quota.receiptId, 'failed');
@@ -155,6 +156,8 @@ router.post('/', async (req, res) => {
       reportDoc.event_phase = eventPhase.phase;
       reportDoc.event_days_until = eventPhase.daysUntil;
     }
+    // 提示词版本追溯（v1.1.0）：0 = 代码默认，≥1 = 后台自定义版本（可归因/可回滚）
+    reportDoc.prompt_version = settings.prompts ? settings.prompts.version || 0 : 0;
     await aiReportsCol.doc(reportId).set(reportDoc);
 
     const usageCol = await collection('usage_limits');
@@ -170,13 +173,15 @@ router.post('/', async (req, res) => {
 // ── 内部函数 ──
 
 async function generateValidatedOutput({ mood, text, source, requestId, mode, ctx }) {
+  // 生效提示词配置：校验/重试口径与 prompt 同源（后台改条数后整链路一致）
+  const promptCfg = ctx && ctx.prompts && typeof ctx.prompts === 'object' ? ctx.prompts : DEFAULT_PROMPTS;
   let lastFailure = { kind: 'invalid_output', reason: 'not_generated' };
   for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt += 1) {
     const messages = [
       { role: 'system', content: buildSystemPrompt(mood, source, mode, ctx) },
       { role: 'user', content: buildUserPrompt(mood, text, source) },
     ];
-    if (attempt > 1) messages.push({ role: 'user', content: buildRetryInstruction(lastFailure) });
+    if (attempt > 1) messages.push({ role: 'user', content: buildRetryInstruction(lastFailure, promptCfg) });
 
     let result;
     try {
@@ -190,6 +195,7 @@ async function generateValidatedOutput({ mood, text, source, requestId, mode, ct
     const validation = inspectGeneratedOutput(parseGeneratedText(result && result.text), source, {
       humanize: !ctx || ctx.humanizeEnabled !== false,
       anchorNumbers: collectAnchorNumbers(ctx),
+      line_count: promptCfg.line_count,
     });
     console.log('[ai-cheer] model completed', { requestId, attempt, totalTokens: result?.usage?.total_tokens });
     if (validation.ok) return { ok: true, output: validation.output };
@@ -275,7 +281,7 @@ const DEFAULT_PROMPT = `
 只允许引用下方"可引用数据"中明确提供的具体数字、百分比和英雄名；没有提供的数据不得猜测或补充。数据按语境自然选用即可，不要为了塞数据牺牲口语感。五条文案中最多三条引用数据，至少两条完全不引用数据、只表达自然情绪。
 所有数字必须使用阿拉伯数字（如 4.29、56.7%、28局），禁止使用中文数字（如四點二九、五十六点七、二十八局）。
 
-必须输出 ${CHEER_LINE_COUNT} 条中文短句，每条必须不少于 ${CHEER_LINE_MIN_CHARS} 个字，并尽量写到 30 至 50 字；另输出一句简短的 emoji_caption。emoji_caption 也要自然，不要复述短句。
+必须输出 {{line_count}} 条中文短句，每条必须不少于 {{line_min_chars}} 个字，并尽量写到 30 至 50 字；另输出一句简短的 emoji_caption。emoji_caption 也要自然，不要复述短句。
 
 不得使用传统球类运动词汇，不得声称单场 MVP、本周表现或未提供的赛程结果。
 
@@ -308,55 +314,62 @@ const OFFSEASON_CONSTRAINT_ASIAN_GAMES = `
 `;
 
 // 反 AI 味指南：写入 system prompt 的「禁止清单」（可通过 cheer_settings.humanize_enabled 关闭）
-// 条数口径由 CHEER_LINE_COUNT 动态拼装，避免条数调整后文案漂移
+// 留代码红线：措辞不可后台改，但条数口径随生效配置动态渲染，防条数调整后文案漂移
 const HUMANIZE_GUIDE = `
-避免 AI 腔：禁止排比三连句式（"不只是…更是…"）、禁止连续感叹号（最多一个）、禁止抽象词堆叠（梦想/热爱/永远/信念 每词整次输出最多一次）、禁止句式同构（${CHEER_LINE_COUNT} 条文案开头雷同）、禁止口号式收尾（每句都是正能量总结）。
+避免 AI 腔：禁止排比三连句式（"不只是…更是…"）、禁止连续感叹号（最多一个）、禁止抽象词堆叠（梦想/热爱/永远/信念 每词整次输出最多一次）、禁止句式同构（{{line_count}} 条文案开头雷同）、禁止口号式收尾（每句都是正能量总结）。
 像粉丝真的在打字：有停顿、有细节、允许一点点随意，不要每句都像精心设计的金句。
 `;
 
-// 时间上下文注入提示（date_context_enabled 关闭时不出现）
-const DATE_CONTEXT_HINT = `
-可以自然地融入节气/节日氛围或今日赛事，但每条文案最多提及一次时间语境，不要为了塞日期破坏口语感，也不要写成天气预报或赛事播报。
-`;
-
-// 倒数/临场/当天档强提示：赛事语境从「可选」升级为「必含」（条数口径动态拼装）
-const EVENT_STRONG_HINT = `
-今日赛事是本次文案的核心素材：${CHEER_LINE_COUNT} 条文案中至少一条要自然体现这一赛事语境（倒计时、临场期待或当日应援均可），
-倒计时可以直接使用今日背景中给出的天数；其余文案保持日常陪伴感，不要每条都写赛事。
-`;
-
-// 预热 preview 档提示（v1.1.0）：预热窗口内事件每天可见，但只轻提一句，
-// 防「连续 30 天每天喊倒计时」的新公式化（替换原 DATE_CONTEXT_HINT 在预热日的事件措辞）
-const EVENT_PREVIEW_HINT = `
-今日背景中的赛事处于预热期：${CHEER_LINE_COUNT} 条文案中至少 1 条要轻提赛事（一句带过即可，如"还有 N 天"），其余保持日常；
-倒数天数每条文案最多出现一次，不要 ${CHEER_LINE_COUNT} 条全挂倒数，也不要把预热写成临场氛围。
-`;
+// 三档事件提示模板默认值已迁移至 prompt-template.js DEFAULT_PROMPTS（v1.1.0 配置化：
+// 措辞进后台 cheer_settings.prompts，占位符渲染走 renderTemplate 单点，删配置即回默认）
 
 function buildSystemPrompt(mood, source, mode = 'season', ctx = {}) {
   const isOffseason = mode === 'career' || mode === 'emotion';
   const moodPrompts = isOffseason ? MOOD_PROMPTS_OFFSEASON : MOOD_PROMPTS;
-  const parts = [DEFAULT_PROMPT];
+  // 生效提示词配置（后台可改，含代码默认回退）；条数/字数口径与校验层同源
+  const promptCfg = ctx.prompts && typeof ctx.prompts === 'object' ? ctx.prompts : DEFAULT_PROMPTS;
+  const lineCount = Number.isInteger(promptCfg.line_count) ? promptCfg.line_count : CHEER_LINE_COUNT;
+  const lineMinChars = Number.isInteger(promptCfg.line_min_chars) ? promptCfg.line_min_chars : CHEER_LINE_MIN_CHARS;
+  const renderVars = { line_count: lineCount, line_min_chars: lineMinChars };
+  const parts = [renderTemplate(DEFAULT_PROMPT, renderVars).text];
   if (isOffseason) {
     // 事件命中（国家赛事）时用「正向替换」的豁免版约束，保留 KPL 禁令但放行亚运表述
     parts.push(ctx.eventHit ? OFFSEASON_CONSTRAINT_ASIAN_GAMES : OFFSEASON_CONSTRAINT);
   }
-  if (ctx.humanizeEnabled !== false) parts.push(HUMANIZE_GUIDE);
+  if (ctx.humanizeEnabled !== false) parts.push(renderTemplate(HUMANIZE_GUIDE, renderVars).text);
+  if (Array.isArray(promptCfg.few_shot_examples) && promptCfg.few_shot_examples.length) {
+    // few-shot 示例池（后台标定，0-20 条）：仅语气与角度参考，禁止照抄
+    parts.push(`参考示例（仅语气与角度参考，禁止照抄原文与其中数字）：\n${promptCfg.few_shot_examples.map((s) => `- ${s}`).join('\n')}`);
+  }
   if (ctx.dateContext) {
-    // 事件提示三档映射（v1.1.0）：倒数/临场/当天 → 强必含 EVENT_STRONG_HINT；
-    // 预热 preview → 轻提软必含 EVENT_PREVIEW_HINT；无事件命中 → 通用时间语境软提示
+    // 事件提示三档映射（v1.1.0）：倒数/临场/当天 → 强必含；预热 preview → 轻提软必含；无事件 → 通用软提示
     const phaseName = ctx.eventHit && ctx.eventPhase ? ctx.eventPhase.phase : null;
-    const eventHint = phaseName && ['countdown', 'eve', 'today'].includes(phaseName)
-      ? EVENT_STRONG_HINT
-      : (phaseName === 'preview' ? EVENT_PREVIEW_HINT : DATE_CONTEXT_HINT);
+    const isStrong = Boolean(phaseName && ['countdown', 'eve', 'today'].includes(phaseName));
+    const isPreview = phaseName === 'preview';
+    const template = isStrong
+      ? promptCfg.event_strong_hint
+      : (isPreview ? promptCfg.event_preview_hint : promptCfg.date_context_hint);
+    const eventMinLines = isStrong
+      ? promptCfg.event_min_lines_strong
+      : (isPreview ? promptCfg.event_min_lines_preview : 0);
+    const eventAnchor = ctx.dateContext.anchors.find((a) => a.kind === 'event');
+    const rendered = renderTemplate(template, {
+      ...renderVars,
+      event_min_lines: eventMinLines,
+      event_text: eventAnchor ? eventAnchor.text : '',
+      date_label: ctx.dateContext.dateLabel,
+      anchors_text: ctx.dateContext.anchors.map((a) => a.text).join('；'),
+    });
+    // 渲染残留（占位符打错）时回退模板原文：保存层已拦截，运行时双保险
     parts.push(
-      `今日背景：${ctx.dateContext.dateLabel}，${ctx.dateContext.anchors.map((a) => a.text).join('；')}\n${eventHint}`
+      `今日背景：${ctx.dateContext.dateLabel}，${ctx.dateContext.anchors.map((a) => a.text).join('；')}\n${rendered.ok ? rendered.text : template}`
     );
   }
   parts.push(`语气：${moodPrompts[mood]}`);
   parts.push(`可引用数据：${source.promptLines.length ? source.promptLines.join('；') : '无，生成纯情绪应援文案'}`);
-  const jsonExample = `{"lines":[${Array.from({ length: CHEER_LINE_COUNT }, (_, i) => `"文案${i + 1}"`).join(',')}],"emoji_caption":"配文"}`;
+  const jsonExample = `{"lines":[${Array.from({ length: lineCount }, (_, i) => `"文案${i + 1}"`).join(',')}],"emoji_caption":"配文"}`;
   // 长度要求写进末尾指令行：模型对靠近输出位置的指令更敏感（扩条数后出现"总量守恒、每条变短"的压缩行为）
-  parts.push(`只输出合法 JSON，lines 必须恰好包含 ${CHEER_LINE_COUNT} 个字符串、每条不少于 ${CHEER_LINE_MIN_CHARS} 个字：${jsonExample}`);
+  parts.push(`只输出合法 JSON，lines 必须恰好包含 ${lineCount} 个字符串、每条不少于 ${lineMinChars} 个字：${jsonExample}`);
   return parts.join('\n');
 }
 
@@ -383,7 +396,9 @@ function parseGeneratedText(text) {
 }
 
 function inspectGeneratedOutput(output, source, opts = {}) {
-  if (!output || !Array.isArray(output.lines) || output.lines.length !== CHEER_LINE_COUNT) {
+  // 条数口径与提示词配置同源（后台改条数后校验层同步生效）；硬下限 10 字留代码红线
+  const lineCount = Number.isInteger(opts.line_count) && opts.line_count > 0 ? opts.line_count : CHEER_LINE_COUNT;
+  if (!output || !Array.isArray(output.lines) || output.lines.length !== lineCount) {
     return { ok: false, kind: 'invalid_output', reason: 'line_count' };
   }
   const lineLengths = output.lines.map(textLength);
@@ -475,21 +490,23 @@ function checkAiFlavor(lines) {
   return null;
 }
 
-function buildRetryInstruction(failure) {
+function buildRetryInstruction(failure, promptCfg = {}) {
+  const lineCount = Number.isInteger(promptCfg.line_count) ? promptCfg.line_count : CHEER_LINE_COUNT;
+  const lineMinChars = Number.isInteger(promptCfg.line_min_chars) ? promptCfg.line_min_chars : CHEER_LINE_MIN_CHARS;
   if (failure.reason === 'line_length') {
-    return `上一次 ${CHEER_LINE_COUNT} 条文案的字符数分别为 ${failure.lineLengths.join('、')}，请全部重新生成并确保每条不少于 ${CHEER_LINE_MIN_CHARS} 个字、尽量写到 30 至 50 个字。不要解释，只输出指定 JSON。`;
+    return `上一次 ${lineCount} 条文案的字符数分别为 ${failure.lineLengths.join('、')}，请全部重新生成并确保每条不少于 ${lineMinChars} 个字、尽量写到 30 至 50 个字。不要解释，只输出指定 JSON。`;
   }
   if (failure.reason === 'ungrounded_number') {
     return '上一次输出包含未提供的数据。请全部重新生成，只能使用"可引用数据"中的数字；不要解释，只输出指定 JSON。';
   }
   if (failure.reason === 'ai_flavor') {
     const detail = (failure.ai && failure.ai.detail) || '句式雷同/口号化';
-    return `上一次文案有 AI 腔（${detail}）。请全部重新生成：拆散句式、减少感叹号、让 ${CHEER_LINE_COUNT} 条文案的角度和开头都不一样、每条不少于 ${CHEER_LINE_MIN_CHARS} 个字、去掉口号式总结；不要解释，只输出指定 JSON。`;
+    return `上一次文案有 AI 腔（${detail}）。请全部重新生成：拆散句式、减少感叹号、让 ${lineCount} 条文案的角度和开头都不一样、每条不少于 ${lineMinChars} 个字、去掉口号式总结；不要解释，只输出指定 JSON。`;
   }
   if (failure.kind === 'blocked_content') {
     return '上一次输出未通过内容安全检查。请全部重新生成正常、积极的粉丝应援文案；不要解释，只输出指定 JSON。';
   }
-  return `上一次输出格式不符合要求。请全部重新生成恰好 ${CHEER_LINE_COUNT} 条、每条不少于 ${CHEER_LINE_MIN_CHARS} 个字的文案；不要解释，只输出指定 JSON。`;
+  return `上一次输出格式不符合要求。请全部重新生成恰好 ${lineCount} 条、每条不少于 ${lineMinChars} 个字的文案；不要解释，只输出指定 JSON。`;
 }
 
 async function consumeAiQuota({ subjectId, ipHash, requestId, date }) {

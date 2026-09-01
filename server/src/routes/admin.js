@@ -21,6 +21,9 @@ const {
   setCheerSettings,
   setCheerDataMode,
   CHEER_DATA_MODES,
+  getCheerPrompts,
+  setCheerPrompts,
+  resetCheerPrompts,
   getSchedulerSettings,
   setSchedulerSettings,
   getCheerEvents,
@@ -551,6 +554,46 @@ router.delete('/cheer/events/:id', requireAuth, async (req, res) => {
     res.json({ ok: true, message: '事件已删除' });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+// ── 提示词配置化（v1.1.0 Task 3，需登录；30s TTL 缓存，改完自动生效）──
+
+// GET /api/admin/cheer/prompts — 查看生效提示词配置（含代码默认回退后的完整字段 + 版本号）
+router.get('/cheer/prompts', requireAuth, async (req, res) => {
+  try {
+    const prompts = await getCheerPrompts();
+    res.json({
+      ok: true,
+      prompts,
+      version: prompts.version,
+      customized: prompts.version >= 1,
+      placeholders: ['line_count', 'line_min_chars', 'event_min_lines', 'event_text', 'date_label', 'anchors_text', 'recent_openings', 'roles_hint'],
+      message: prompts.version >= 1 ? '当前为后台自定义配置' : '当前为代码默认模板（未自定义）',
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// PUT /api/admin/cheer/prompts — 保存提示词配置（占位符/数值硬校验，非法拒绝落库；version 自增）
+router.put('/cheer/prompts', requireAuth, async (req, res) => {
+  try {
+    const saved = await setCheerPrompts(req.body || {});
+    res.json({ ok: true, prompts: saved, version: saved.version, message: '提示词已保存，下一次文案生成即生效（TTL 缓存 ≤30s）' });
+  } catch (err) {
+    if (err.code === 'INVALID_PROMPTS') return res.status(400).json({ ok: false, error: err.message });
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// DELETE /api/admin/cheer/prompts — 删除 DB 子文档回代码默认模板（version 归 0，即「恢复默认」）
+router.delete('/cheer/prompts', requireAuth, async (req, res) => {
+  try {
+    const defaults = await resetCheerPrompts();
+    res.json({ ok: true, prompts: defaults, version: 0, message: '已恢复代码默认模板' });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 

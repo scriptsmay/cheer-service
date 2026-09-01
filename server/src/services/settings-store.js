@@ -16,6 +16,7 @@ const { collection } = require('../db/mongo');
 const config = require('../config/env');
 const { CRON } = require('../jobs/schedules');
 const { resolveEventPhase } = require('../lib/date-context');
+const { DEFAULT_PROMPTS, validateTemplate } = require('../lib/prompt-template');
 
 const CHEER_DOC = 'cheer_settings';
 const SCHEDULER_DOC = 'scheduler_settings';
@@ -68,6 +69,7 @@ async function getCheerSettings() {
   const value = {
     mode: config.cheerDataMode,
     ...CHEER_SETTING_DEFAULTS,
+    prompts: { ...DEFAULT_PROMPTS }, // DB 不可用/未配置时回代码默认（version 0）
     source: 'env',
   };
   try {
@@ -80,6 +82,8 @@ async function getCheerSettings() {
         ? doc.humanize_enabled : CHEER_SETTING_DEFAULTS.humanize_enabled;
       value.event_context_enabled = typeof doc.event_context_enabled === 'boolean'
         ? doc.event_context_enabled : CHEER_SETTING_DEFAULTS.event_context_enabled;
+      // 提示词配置（v1.1.0）：子文档逐字段合并代码默认，随同一份 30s TTL 缓存生效
+      value.prompts = mergePromptConfig(doc.prompts);
       value.source = 'db';
     }
     writeCache(CHEER_DOC, value);
@@ -130,6 +134,116 @@ async function setCheerSettings(patch) {
     event_context_enabled: saved.event_context_enabled !== false,
     source: 'db',
   };
+}
+
+// ── 提示词配置（v1.1.0 Task 3）：app_config/cheer_settings.prompts 子文档 ──
+// 分层红线：模板措辞/数值参数进后台；JSON 格式约束、校验电池、占位符渲染器、档位计算留代码。
+// 结构化默认值见 prompt-template.js DEFAULT_PROMPTS（version 0 = 未自定义，删 DB 子文档即回代码默认）。
+
+const PROMPT_TEMPLATE_FIELDS = ['event_strong_hint', 'event_preview_hint', 'date_context_hint'];
+const PROMPT_INT_FIELDS = {
+  line_count: [1, 10],
+  line_min_chars: [5, 100],
+  event_min_lines_preview: [0, 10],
+  event_min_lines_strong: [0, 10],
+};
+const LINE_TARGET_RANGE_RE = /^\d{1,4}\s*-\s*\d{1,4}$/u;
+
+/** 合并提示词配置：DB 原始值逐字段类型校验后覆盖代码默认，非法字段静默回默认（写入侧另有硬校验） */
+function mergePromptConfig(raw) {
+  const merged = { ...DEFAULT_PROMPTS };
+  if (raw && typeof raw === 'object') {
+    for (const field of PROMPT_TEMPLATE_FIELDS) {
+      if (typeof raw[field] === 'string' && raw[field].trim()) merged[field] = raw[field];
+    }
+    for (const [field, [min, max]] of Object.entries(PROMPT_INT_FIELDS)) {
+      if (Number.isInteger(raw[field]) && raw[field] >= min && raw[field] <= max) merged[field] = raw[field];
+    }
+    if (typeof raw.line_target_range === 'string' && LINE_TARGET_RANGE_RE.test(raw.line_target_range)) {
+      merged.line_target_range = raw.line_target_range.replace(/\s/gu, '');
+    }
+    if (Array.isArray(raw.few_shot_examples)) {
+      merged.few_shot_examples = raw.few_shot_examples
+        .filter((item) => typeof item === 'string' && item.trim())
+        .map((item) => item.trim().slice(0, 60))
+        .slice(0, 20);
+    }
+    if (Number.isInteger(raw.version) && raw.version >= 1) merged.version = raw.version;
+  }
+  return merged;
+}
+
+/** 读取提示词配置（合并代码默认后的生效值，随 getCheerSettings 的 30s TTL 缓存） */
+async function getCheerPrompts() {
+  const settings = await getCheerSettings();
+  return settings.prompts;
+}
+
+/**
+ * 保存提示词配置（全量替换 prompts 子文档，version 自增）。
+ * 校验失败抛错（error.code = 'INVALID_PROMPTS'），不落库、不 bump version。
+ * @param {object} patch 与 DEFAULT_PROMPTS 同构的子集
+ * @returns {object} 保存后的完整 prompts 配置（含自增后的 version）
+ */
+async function setCheerPrompts(patch) {
+  const body = patch && typeof patch === 'object' ? patch : {};
+  const current = mergePromptConfig((await readCheerDoc())?.prompts);
+  const errors = [];
+
+  for (const field of PROMPT_TEMPLATE_FIELDS) {
+    if (body[field] === undefined) continue;
+    if (typeof body[field] !== 'string') {
+      errors.push(`${field}: 必须为字符串`);
+      continue;
+    }
+    const check = validateTemplate(body[field]);
+    if (!check.ok) errors.push(`${field}: ${check.errors.join('；')}`);
+  }
+  for (const [field, [min, max]] of Object.entries(PROMPT_INT_FIELDS)) {
+    if (body[field] === undefined) continue;
+    if (!Number.isInteger(body[field]) || body[field] < min || body[field] > max) {
+      errors.push(`${field}: 必须为 ${min}-${max} 的整数`);
+    }
+  }
+  if (body.line_target_range !== undefined
+    && (typeof body.line_target_range !== 'string' || !LINE_TARGET_RANGE_RE.test(body.line_target_range))) {
+    errors.push('line_target_range: 必须为 "min-max" 数字区间（如 30-50）');
+  }
+  if (body.few_shot_examples !== undefined) {
+    if (!Array.isArray(body.few_shot_examples)) {
+      errors.push('few_shot_examples: 必须为字符串数组');
+    } else if (body.few_shot_examples.length > 20) {
+      errors.push('few_shot_examples: 最多 20 条');
+    } else if (body.few_shot_examples.some((item) => typeof item !== 'string' || !item.trim())) {
+      errors.push('few_shot_examples: 每条必须为非空字符串');
+    }
+  }
+
+  if (errors.length) {
+    const error = new Error(`提示词配置校验失败：${errors.join('；')}`);
+    error.code = 'INVALID_PROMPTS';
+    throw error;
+  }
+
+  const next = mergePromptConfig({ ...current, ...body });
+  next.version = (current.version || 0) + 1;
+  await patchCheerDoc({ prompts: next });
+  return next;
+}
+
+/** 删除 prompts 子文档 → 回代码默认模板（version 归 0），下一次生成即生效 */
+async function resetCheerPrompts() {
+  const col = await collection('app_config');
+  const existing = await readCheerDoc();
+  if (existing && existing.prompts !== undefined) {
+    const next = { ...existing };
+    delete next.prompts;
+    delete next._id;
+    next.updated_at = new Date().toISOString();
+    await col.doc(CHEER_DOC).set(next);
+    invalidateCache(CHEER_DOC);
+  }
+  return { ...DEFAULT_PROMPTS };
 }
 
 // ── 调度配置 ──
@@ -266,6 +380,9 @@ module.exports = {
   setCheerDataMode,
   getCheerSettings,
   setCheerSettings,
+  getCheerPrompts,
+  setCheerPrompts,
+  resetCheerPrompts,
   getSchedulerSettings,
   setSchedulerSettings,
   getCheerEvents,

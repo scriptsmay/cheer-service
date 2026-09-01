@@ -278,7 +278,7 @@ describe('buildSystemPrompt — 多样性上下文注入', () => {
       const prompt = buildSystemPrompt('daily', sourceCareer, 'career', {
         dateContext, eventHit: { _id: 'e1' }, eventPhase: phase,
       });
-      assert.ok(prompt.includes('至少一条要自然体现'), `${dateStr}（${phase.phase}）应为必含强提示`);
+      assert.ok(prompt.includes('至少 1 条要自然体现'), `${dateStr}（${phase.phase}）应为必含强提示`);
       assert.ok(!prompt.includes('最多提及一次时间语境'), `${dateStr} 不应保留软提示措辞`);
     }
   });
