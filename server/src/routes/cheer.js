@@ -325,6 +325,13 @@ const EVENT_STRONG_HINT = `
 倒计时可以直接使用今日背景中给出的天数；其余文案保持日常陪伴感，不要每条都写赛事。
 `;
 
+// 预热 preview 档提示（v1.1.0）：预热窗口内事件每天可见，但只轻提一句，
+// 防「连续 30 天每天喊倒计时」的新公式化（替换原 DATE_CONTEXT_HINT 在预热日的事件措辞）
+const EVENT_PREVIEW_HINT = `
+今日背景中的赛事处于预热期：${CHEER_LINE_COUNT} 条文案中至少 1 条要轻提赛事（一句带过即可，如"还有 N 天"），其余保持日常；
+倒数天数每条文案最多出现一次，不要 ${CHEER_LINE_COUNT} 条全挂倒数，也不要把预热写成临场氛围。
+`;
+
 function buildSystemPrompt(mood, source, mode = 'season', ctx = {}) {
   const isOffseason = mode === 'career' || mode === 'emotion';
   const moodPrompts = isOffseason ? MOOD_PROMPTS_OFFSEASON : MOOD_PROMPTS;
@@ -335,12 +342,14 @@ function buildSystemPrompt(mood, source, mode = 'season', ctx = {}) {
   }
   if (ctx.humanizeEnabled !== false) parts.push(HUMANIZE_GUIDE);
   if (ctx.dateContext) {
-    // 倒数/临场/当天档赛事为必含素材；预热 preview 档（含里程碑日）维持软提示
-    const strongEvent = Boolean(
-      ctx.eventHit && ctx.eventPhase && ['countdown', 'eve', 'today'].includes(ctx.eventPhase.phase)
-    );
+    // 事件提示三档映射（v1.1.0）：倒数/临场/当天 → 强必含 EVENT_STRONG_HINT；
+    // 预热 preview → 轻提软必含 EVENT_PREVIEW_HINT；无事件命中 → 通用时间语境软提示
+    const phaseName = ctx.eventHit && ctx.eventPhase ? ctx.eventPhase.phase : null;
+    const eventHint = phaseName && ['countdown', 'eve', 'today'].includes(phaseName)
+      ? EVENT_STRONG_HINT
+      : (phaseName === 'preview' ? EVENT_PREVIEW_HINT : DATE_CONTEXT_HINT);
     parts.push(
-      `今日背景：${ctx.dateContext.dateLabel}，${ctx.dateContext.anchors.map((a) => a.text).join('；')}\n${strongEvent ? EVENT_STRONG_HINT : DATE_CONTEXT_HINT}`
+      `今日背景：${ctx.dateContext.dateLabel}，${ctx.dateContext.anchors.map((a) => a.text).join('；')}\n${eventHint}`
     );
   }
   parts.push(`语气：${moodPrompts[mood]}`);

@@ -283,15 +283,28 @@ describe('buildSystemPrompt — 多样性上下文注入', () => {
     }
   });
 
-  test('preview 里程碑档（T-30）：维持软提示，不强制必含', () => {
-    const phase = dc.resolveEventPhase(EVENT_ASIAN_GAMES, '2026-08-29');
-    assert.strictEqual(phase.phase, 'preview');
-    const dateContext = dc.getDateContext('2026-08-29', phase, EVENT_ASIAN_GAMES);
-    const prompt = buildSystemPrompt('daily', sourceCareer, 'career', {
-      dateContext, eventHit: { _id: 'e1' }, eventPhase: phase,
-    });
-    assert.ok(prompt.includes('最多提及一次时间语境'), '预热档应保留软提示');
-    assert.ok(!prompt.includes('至少一条要自然体现'), '预热档不应升级为必含');
+  test('preview 档（T-30 里程碑 / T-26 非里程碑）：轻提软必含提示，非强必含也非旧软提示', () => {
+    for (const dateStr of ['2026-08-29', '2026-09-02']) {
+      const phase = dc.resolveEventPhase(EVENT_ASIAN_GAMES, dateStr);
+      assert.strictEqual(phase.phase, 'preview');
+      const dateContext = dc.getDateContext(dateStr, phase, EVENT_ASIAN_GAMES);
+      const prompt = buildSystemPrompt('daily', sourceCareer, 'career', {
+        dateContext, eventHit: { _id: 'e1' }, eventPhase: phase,
+      });
+      assert.ok(prompt.includes('至少 1 条要轻提赛事'), `${dateStr} 预热档应注入轻提软必含提示`);
+      assert.ok(prompt.includes(`不要 ${CHEER_LINE_COUNT} 条全挂倒数`), '应含防过度提及约束');
+      assert.ok(!prompt.includes('至少一条要自然体现'), '预热档不应升级为强必含');
+      assert.ok(!prompt.includes('最多提及一次时间语境'), '预热档应替换旧通用软提示措辞');
+    }
+  });
+
+  test('无事件命中（纯节日日）：维持通用时间语境软提示', () => {
+    const dateContext = dc.getDateContext('2026-10-01', null, null); // 国庆，事件窗口外
+    assert.ok(dateContext, '国庆日应有锚点');
+    const prompt = buildSystemPrompt('daily', sourceCareer, 'career', { dateContext });
+    assert.ok(prompt.includes('最多提及一次时间语境'), '无事件日应用通用软提示');
+    assert.ok(!prompt.includes('轻提赛事'), '不应出现预热提示');
+    assert.ok(!prompt.includes('至少一条要自然体现'), '不应出现强必含提示');
   });
 
   test('无 dateContext 时不出现时间段', () => {
