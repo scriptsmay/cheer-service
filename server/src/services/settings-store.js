@@ -140,7 +140,7 @@ async function setCheerSettings(patch) {
 // 分层红线：模板措辞/数值参数进后台；JSON 格式约束、校验电池、占位符渲染器、档位计算留代码。
 // 结构化默认值见 prompt-template.js DEFAULT_PROMPTS（version 0 = 未自定义，删 DB 子文档即回代码默认）。
 
-const PROMPT_TEMPLATE_FIELDS = ['event_strong_hint', 'event_preview_hint', 'date_context_hint'];
+const PROMPT_TEMPLATE_FIELDS = ['event_strong_hint', 'event_preview_hint', 'date_context_hint', 'user_text_hint'];
 const PROMPT_INT_FIELDS = {
   line_count: [1, 10],
   line_min_chars: [5, 100],

@@ -23,6 +23,7 @@ const INTERP_LIMITS = {
   anchors_text: 500,
   recent_openings: 600,
   roles_hint: 300,
+  user_text: 120, // 与路由入参 120 字上限一致
 };
 
 const PLACEHOLDER_RE = /\{\{\s*([a-z_]+)\s*\}\}/gu;
@@ -72,6 +73,7 @@ function sampleVars() {
     anchors_text: '26 天后，亚运赛场见',
     recent_openings: '今天也要加油呀、翻出旧录像又看了一遍',
     roles_hint: '日常陪伴 / 赛事轻提 / 回忆杀 / 互动提问 / 应援口号',
+    user_text: '9月顺利，加油',
   };
 }
 
@@ -107,6 +109,9 @@ const DEFAULT_PROMPTS = {
   event_strong_hint: '今日赛事是本次文案的核心素材：{{line_count}} 条文案中至少 {{event_min_lines}} 条要自然体现这一赛事语境（倒计时、临场期待或当日应援均可），\n倒计时可以直接使用今日背景中给出的天数；其余文案保持日常陪伴感，不要每条都写赛事。',
   event_preview_hint: '今日背景中的赛事处于预热期：{{line_count}} 条文案中至少 {{event_min_lines}} 条要轻提赛事（一句带过即可，如"还有 N 天"），其余保持日常；\n倒数天数每条文案最多出现一次，不要 {{line_count}} 条全挂倒数，也不要把预热写成临场氛围。',
   date_context_hint: '可以自然地融入节气/节日氛围或今日赛事，但每条文案最多提及一次时间语境，不要为了塞日期破坏口语感，也不要写成天气预报或赛事播报。',
+  // 用户补充提示（text 非空时替换原「用户补充：」行）：给模型明确指令把补充内容织入文案，
+  // 否则补充行会被角色分工/格式约束淹没（线上疑问：text 无权重感，根因即此）
+  user_text_hint: '用户补充是用户此刻想传达的话：「{{user_text}}」。至少一条文案要自然呼应或化用其内容，其余保持原有角色角度；不要逐字照抄整句，不要生硬嵌字。',
   // 采样参数（v1.1.0 Task 6）：0 起步观察，后台可调；candidate_count > 1 时一次生成多候选校验择优（免费期零负担，出免费期建议回 1）
   frequency_penalty: 0,
   presence_penalty: 0,

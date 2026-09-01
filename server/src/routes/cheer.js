@@ -230,7 +230,7 @@ async function generateValidatedOutput({ mood, text, source, requestId, mode, ct
   for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt += 1) {
     const messages = [
       { role: 'system', content: buildSystemPrompt(mood, source, mode, ctx) },
-      { role: 'user', content: buildUserPrompt(mood, text, source, roles) },
+      { role: 'user', content: buildUserPrompt(mood, text, source, roles, promptCfg) },
     ];
     if (attempt > 1) messages.push({ role: 'user', content: buildRetryInstruction(lastFailure, promptCfg) });
 
@@ -442,9 +442,15 @@ function buildSystemPrompt(mood, source, mode = 'season', ctx = {}) {
   return parts.join('\n');
 }
 
-function buildUserPrompt(mood, text, source, roles = []) {
+function buildUserPrompt(mood, text, source, roles = [], promptCfg = DEFAULT_PROMPTS) {
+  const cfg = promptCfg && typeof promptCfg === 'object' ? promptCfg : DEFAULT_PROMPTS;
   const lines = [`心情：${MOOD_NAMES[mood]}`, `数据条目数：${source.refs.length}`];
-  if (text) lines.push(`用户补充：${text}`);
+  if (text) {
+    // 用户补充（v1.1.0）：从裸「用户补充：」行升级为可配置指令模板——
+    // 明确要求至少一条文案呼应补充内容，否则会被角色分工/格式约束淹没（线上实测无权重感）
+    const rendered = renderTemplate(cfg.user_text_hint || DEFAULT_PROMPTS.user_text_hint, { user_text: text });
+    lines.push(rendered.ok ? rendered.text : renderTemplate(DEFAULT_PROMPTS.user_text_hint, { user_text: text }).text);
+  }
   if (roles.length) {
     lines.push(`本组 ${roles.length} 条文案分别承担：${roles.join('；')}。每条聚焦自己的角色展开，角度不要互相重合。`);
   }
