@@ -10,18 +10,18 @@
 npm run dev        # node --env-file=.env --watch server/src/app.js，默认 :3000
 ```
 
-| 依赖 | 版本要求 | 说明 |
-|---|---|---|
-| Node | ≥ 18（用到 `--env-file`、内置 test runner） | |
-| Docker | 任意近期版本 | 只为跑本地 MongoDB |
-| MongoDB | 7（与生产 compose 同版本） | **必须 replicaSet 模式**（`runTransaction` 用事务） |
+| 依赖    | 版本要求                                    | 说明                                                |
+| ------- | ------------------------------------------- | --------------------------------------------------- |
+| Node    | ≥ 18（用到 `--env-file`、内置 test runner） |                                                     |
+| Docker  | 任意近期版本                                | 只为跑本地 MongoDB                                  |
+| MongoDB | 7（与生产 compose 同版本）                  | **必须 replicaSet 模式**（`runTransaction` 用事务） |
 
 ## 1. 不需要 MongoDB 也能跑的部分
 
-| 命令 | 说明 |
-|---|---|
-| `npm test` | 全部单测走内存 mock DB，178 用例（v1.1.0）直接跑，零配置 |
-| `npm run preview:ai-cheer -- --no-data --events-file demo-events.json` | 纯情绪 + 本地事件文件，不连 DB，真实调 AI |
+| 命令                                                                   | 说明                                                     |
+| ---------------------------------------------------------------------- | -------------------------------------------------------- |
+| `npm test`                                                             | 全部单测走内存 mock DB，178 用例（v1.1.0）直接跑，零配置 |
+| `npm run preview:ai-cheer -- --no-data --events-file demo-events.json` | 纯情绪 + 本地事件文件，不连 DB，真实调 AI                |
 
 ## 2. MongoDB 初始化（一次性）
 
@@ -43,10 +43,12 @@ docker exec cheer-mongo-dev mongosh --quiet --eval 'db.hello().isWritablePrimary
 > 宿主机的 Node 驱动做副本集发现时解析不了该主机名，报
 > `getaddrinfo ENOTFOUND a9c6effd191d`。
 > 已中招的修复方式：
+>
 > ```bash
 > docker exec cheer-mongo-dev mongosh --quiet --eval \
 >   'rs.reconfig({_id:"rs0", members:[{_id:0, host:"localhost:27017"}]}, {force:true})'
 > ```
+>
 > 副本集配置持久化在数据目录里，容器重启无需重配；只有 `docker rm` 重建才需要重来。
 
 ## 3. `.env` 本地化配置
@@ -65,7 +67,7 @@ WEEKLY_STORY_ENABLED=false
 ```
 
 其余键（`AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` / `JWT_SECRET` / `APP_USERS` /
-`IP_HASH_SALT` / `BLOCKED_TERMS`）保持现状即可；AI 端点走 litellm 网关，本地可直接用。
+`IP_HASH_SALT` / `BLOCKED_TERMS`）保持现状即可；AI 端点走 openai 网关。
 
 > ⚠️ **禁止**把本地开发环境的 `MONGO_URI` 指向生产库（哪怕走 SSH 隧道）——
 > dev 写入会污染生产数据（`ai_reports`、额度 `usage_limits`、`app_config`）。
@@ -102,21 +104,21 @@ curl http://localhost:3000/api/health
 
 ## 6. 常用命令速查
 
-| 命令 | 用途 |
-|---|---|
-| `npm test` | 全量单测（mock DB，无需 Mongo） |
-| `npm run dev` | 开发服务（--watch，:3000） |
-| `npm start` | 生产方式启动（node --env-file=.env） |
+| 命令                                                          | 用途                                                           |
+| ------------------------------------------------------------- | -------------------------------------------------------------- |
+| `npm test`                                                    | 全量单测（mock DB，无需 Mongo）                                |
+| `npm run dev`                                                 | 开发服务（--watch，:3000）                                     |
+| `npm start`                                                   | 生产方式启动（node --env-file=.env）                           |
 | `npm run preview:ai-cheer -- --mode career --date 2026-09-02` | 本地生成预览（连 DB 读事件；`--no-data --events-file` 可离线） |
-| `npm run report:cheer-dup` | 重复率量化周报（14/30 天双窗口 Markdown） |
-| `node --env-file=.env scripts/create-indexes.js` | 建索引（新库一次） |
-| `docker exec cheer-mongo-dev mongosh --quiet` | 进本地库手查 |
+| `npm run report:cheer-dup`                                    | 重复率量化周报（14/30 天双窗口 Markdown）                      |
+| `node --env-file=.env scripts/create-indexes.js`              | 建索引（新库一次）                                             |
+| `docker exec cheer-mongo-dev mongosh --quiet`                 | 进本地库手查                                                   |
 
 ## 7. 常见错误对照
 
-| 报错 | 原因 | 处理 |
-|---|---|---|
-| `getaddrinfo ENOTFOUND <容器id>` | 副本集成员地址登记成了容器主机名（见 §2 坑） | `rs.reconfig(..., {force:true})` 改为 `localhost:27017` |
-| `ECONNREFUSED 127.0.0.1:27017` | 容器没起 / 端口没映射 | `docker ps` 查容器；`docker start cheer-mongo-dev` |
-| `MongoServerError: Transaction numbers are only allowed on a replica set member` | Mongo 以 standalone 模式启动 | 容器必须带 `--replSet rs0` 并 initiate |
-| 启动卡在 MongoDB connection | URI 的 replicaSet 参数与实际不符 | 核对 `.env` 的 `MONGO_URI` 与 §2 步骤 |
+| 报错                                                                             | 原因                                         | 处理                                                    |
+| -------------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------- |
+| `getaddrinfo ENOTFOUND <容器id>`                                                 | 副本集成员地址登记成了容器主机名（见 §2 坑） | `rs.reconfig(..., {force:true})` 改为 `localhost:27017` |
+| `ECONNREFUSED 127.0.0.1:27017`                                                   | 容器没起 / 端口没映射                        | `docker ps` 查容器；`docker start cheer-mongo-dev`      |
+| `MongoServerError: Transaction numbers are only allowed on a replica set member` | Mongo 以 standalone 模式启动                 | 容器必须带 `--replSet rs0` 并 initiate                  |
+| 启动卡在 MongoDB connection                                                      | URI 的 replicaSet 参数与实际不符             | 核对 `.env` 的 `MONGO_URI` 与 §2 步骤                   |
