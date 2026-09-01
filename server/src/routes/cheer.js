@@ -41,6 +41,39 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 const router = express.Router();
 
+// ── 5 条角色分工（v1.1.0 Task 5 反重复）：按天轮换组合，同一档同型、隔天不同 ──
+// 池中角色可被上下文裁剪：赛事倒数/轻提仅在事件命中时入池；生涯数据仅在可引数据非空时入池
+const CHEER_ROLES = [
+  { key: 'daily', label: '日常陪伴' },
+  { key: 'event', label: '赛事倒数' },   // preview 期动态替换为「赛事轻提」
+  { key: 'memory', label: '回忆杀' },
+  { key: 'ask', label: '互动提问' },
+  { key: 'hype', label: '应援口号' },
+  { key: 'stats', label: '生涯数据' },
+];
+
+/**
+ * 按日期种子给本组文案分配角色：同一日期结果稳定，隔天组合不同。
+ * @param {{dateStr:string, lineCount:number, hasEvent:boolean, isPreview:boolean, hasStats:boolean}} opts
+ * @returns {string[]} 长度为 lineCount 的角色标签序列（第 i 条承担第 i 个角色）
+ */
+function assignRoles({ dateStr, lineCount, hasEvent, isPreview, hasStats }) {
+  const pool = CHEER_ROLES
+    .filter((role) => {
+      if (role.key === 'event') return hasEvent;
+      if (role.key === 'stats') return hasStats;
+      return true;
+    })
+    .map((role) => (role.key === 'event' && isPreview ? { ...role, label: '赛事轻提' } : role));
+  if (!pool.length) return [];
+  // 种子 = 日期数字：同一天稳定，隔天位移不同（YYYYMMDD 连续日期模长不同）
+  const seed = Number(String(dateStr || '').replace(/-/gu, '')) || 0;
+  const rotated = [...pool.slice(seed % pool.length), ...pool.slice(0, seed % pool.length)];
+  const roles = [];
+  for (let i = 0; i < lineCount; i += 1) roles.push(rotated[i % rotated.length].label);
+  return roles;
+}
+
 router.post('/', async (req, res) => {
   const requestId = getRequestId(req);
 
@@ -104,7 +137,7 @@ router.post('/', async (req, res) => {
     if (!quota.allowed) return errorResponse(res, 429, 'RATE_LIMITED', '今日应援生成额度已用完', requestId, 86400);
     if (quota.response) return successResponse(res, quota.response, requestId);
 
-    const ctx = { dateContext, eventHit, eventPhase, humanizeEnabled, prompts: settings.prompts, recentOpenings };
+    const ctx = { dateContext, eventHit, eventPhase, humanizeEnabled, prompts: settings.prompts, recentOpenings, date: todayStr };
     const generation = await generateValidatedOutput({ mood, text, source, requestId, mode: dataMode, ctx });
     if (!generation.ok) {
       await markReceipt(quota.receiptId, 'failed');
@@ -179,11 +212,19 @@ async function generateValidatedOutput({ mood, text, source, requestId, mode, ct
   const promptCfg = ctx && ctx.prompts && typeof ctx.prompts === 'object' ? ctx.prompts : DEFAULT_PROMPTS;
   // 近 14 天开头指纹去重集合（校验用）；注入列表在 buildSystemPrompt 内另取近 7 天前 10 条
   const recentOpeningSet = Array.from(new Set(((ctx && ctx.recentOpenings) || []).map((entry) => entry.opening)));
+  // 角色分工（v1.1.0 Task 5）：按日期轮换 + 档位/数据裁剪，重试时保持同一组角色不变
+  const roles = assignRoles({
+    dateStr: (ctx && ctx.date) || shanghaiDate().date,
+    lineCount: Number.isInteger(promptCfg.line_count) ? promptCfg.line_count : CHEER_LINE_COUNT,
+    hasEvent: Boolean(ctx && ctx.eventHit && ctx.eventPhase),
+    isPreview: Boolean(ctx && ctx.eventPhase && ctx.eventPhase.phase === 'preview'),
+    hasStats: Array.isArray(source.refs) && source.refs.length > 0,
+  });
   let lastFailure = { kind: 'invalid_output', reason: 'not_generated' };
   for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt += 1) {
     const messages = [
       { role: 'system', content: buildSystemPrompt(mood, source, mode, ctx) },
-      { role: 'user', content: buildUserPrompt(mood, text, source) },
+      { role: 'user', content: buildUserPrompt(mood, text, source, roles) },
     ];
     if (attempt > 1) messages.push({ role: 'user', content: buildRetryInstruction(lastFailure, promptCfg) });
 
@@ -384,9 +425,12 @@ function buildSystemPrompt(mood, source, mode = 'season', ctx = {}) {
   return parts.join('\n');
 }
 
-function buildUserPrompt(mood, text, source) {
+function buildUserPrompt(mood, text, source, roles = []) {
   const lines = [`心情：${MOOD_NAMES[mood]}`, `数据条目数：${source.refs.length}`];
   if (text) lines.push(`用户补充：${text}`);
+  if (roles.length) {
+    lines.push(`本组 ${roles.length} 条文案分别承担：${roles.join('；')}。每条聚焦自己的角色展开，角度不要互相重合。`);
+  }
   lines.push('请生成可直接复制发布的应援文案。');
   return lines.join('\n');
 }
@@ -693,4 +737,5 @@ module.exports.__test = {
   extractOpening,
   dedupeOpenings,
   getRecentOpenings,
+  assignRoles,
 };

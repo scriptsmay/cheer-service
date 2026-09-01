@@ -23,7 +23,7 @@ const pt = require('../src/lib/prompt-template');
 const { __test } = require('../src/routes/cheer');
 const {
   buildSystemPrompt, inspectGeneratedOutput, buildRetryInstruction,
-  extractOpening, dedupeOpenings, getRecentOpenings,
+  extractOpening, dedupeOpenings, getRecentOpenings, assignRoles, buildUserPrompt,
 } = __test;
 
 // ════════════════════════════════════════════════════════════════
@@ -460,5 +460,70 @@ describe('反重复校验与提示注入', () => {
       prompts, recentOpenings: [{ opening: '今天也要加油呀朋', created_at: '2026-09-01T00:00:00Z' }],
     });
     assert.ok(prompt.includes('避开这些开头：今天也要加油呀朋'));
+  });
+});
+
+// ════════════════════════════════════════════════════════════════
+// 5. 角色分工（v1.1.0 Task 5）：日期轮换 / 档位裁剪 / prompt 注入
+// ════════════════════════════════════════════════════════════════
+
+describe('assignRoles — 角色分工', () => {
+  const BASE = { lineCount: 5, hasEvent: true, isPreview: false, hasStats: true };
+
+  test('同一天结果稳定、隔天组合不同（种子 = 日期）', () => {
+    const d1 = assignRoles({ dateStr: '2026-09-02', ...BASE });
+    const d1again = assignRoles({ dateStr: '2026-09-02', ...BASE });
+    const d2 = assignRoles({ dateStr: '2026-09-03', ...BASE });
+    assert.deepStrictEqual(d1, d1again, '同一天结果稳定');
+    assert.notDeepStrictEqual(d1, d2, '隔天组合应不同');
+  });
+
+  test('默认口径：长度 5、角色均在池内、事件与数据角色随日期轮换出现', () => {
+    const poolLabels = new Set(['日常陪伴', '赛事倒数', '回忆杀', '互动提问', '应援口号', '生涯数据']);
+    const seen = new Set();
+    for (let d = 1; d <= 10; d += 1) {
+      const roles = assignRoles({ dateStr: `2026-09-${String(d).padStart(2, '0')}`, ...BASE });
+      assert.strictEqual(roles.length, 5);
+      for (const role of roles) assert.ok(poolLabels.has(role), `未知角色 ${role}`);
+      roles.forEach((role) => seen.add(role));
+    }
+    // 逐日轮换会裁掉池中一个角色，但 10 天窗口内每个角色都应出现过
+    assert.ok(seen.has('赛事倒数'), '窗口内应出现赛事倒数');
+    assert.ok(seen.has('生涯数据'), '窗口内应出现生涯数据');
+    assert.ok(seen.has('日常陪伴'));
+  });
+
+  test('preview 档：赛事倒数替换为赛事轻提', () => {
+    const roles = assignRoles({ dateStr: '2026-09-02', ...BASE, isPreview: true });
+    assert.ok(roles.includes('赛事轻提'));
+    assert.ok(!roles.includes('赛事倒数'));
+  });
+
+  test('无事件命中：赛事角色不入池（连续多日抽查）', () => {
+    for (let d = 1; d <= 7; d += 1) {
+      const roles = assignRoles({ dateStr: `2026-09-0${d}`, lineCount: 5, hasEvent: false, isPreview: false, hasStats: true });
+      assert.ok(!roles.includes('赛事倒数'), `09-0${d} 无事件不应含赛事角色`);
+      assert.ok(!roles.includes('赛事轻提'));
+      assert.strictEqual(roles.length, 5);
+    }
+  });
+
+  test('emotion 模式（无数据 refs）：生涯数据不入池', () => {
+    for (let d = 1; d <= 7; d += 1) {
+      const roles = assignRoles({ dateStr: `2026-09-0${d}`, lineCount: 5, hasEvent: true, isPreview: true, hasStats: false });
+      assert.ok(!roles.includes('生涯数据'), `09-0${d} 无 refs 不应含生涯数据`);
+    }
+  });
+
+  test('line_count 超池：循环补齐且长度正确', () => {
+    const roles = assignRoles({ dateStr: '2026-09-02', lineCount: 8, hasEvent: true, isPreview: false, hasStats: true });
+    assert.strictEqual(roles.length, 8);
+  });
+
+  test('buildUserPrompt 注入角色分工行（无角色时不注入）', () => {
+    const source = { refs: [], promptLines: [] };
+    assert.ok(!buildUserPrompt('daily', '', source).includes('分别承担'), '无角色时不注入该行');
+    const withRoles = buildUserPrompt('daily', '', source, ['日常陪伴', '赛事轻提']);
+    assert.ok(withRoles.includes('本组 2 条文案分别承担：日常陪伴；赛事轻提'));
   });
 });
