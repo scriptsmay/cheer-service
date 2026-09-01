@@ -7,7 +7,7 @@
 
 const express = require('express');
 const { randomUUID } = require('node:crypto');
-const { collection, runTransaction } = require('../db/mongo');
+const { collection, runTransaction, command } = require('../db/mongo');
 const { generateText } = require('../services/ai');
 const { resolveIdentity } = require('../services/identity');
 const { successResponse, errorResponse } = require('../services/response');
@@ -84,6 +84,8 @@ router.post('/', async (req, res) => {
       dateContext = getDateContext(todayStr, eventPhase, eventHit, avoidText);
     }
     const humanizeEnabled = settings.humanize_enabled !== false;
+    // 反重复·历史指纹（v1.1.0 Task 4）：近 14 天成功输出开头 → 注入避开列表（近 7 天去重前 10）+ 校验层拒绝重复
+    const recentOpenings = await getRecentOpenings(identity.subjectId, 14);
 
     // 事件 refs 注入：仅倒数/临场/当天档进 refs（前端应援卡展示），预热档只在 prompt 轻提
     if (eventPhase && eventPhase.phase !== 'preview' && eventHit) {
@@ -102,7 +104,7 @@ router.post('/', async (req, res) => {
     if (!quota.allowed) return errorResponse(res, 429, 'RATE_LIMITED', '今日应援生成额度已用完', requestId, 86400);
     if (quota.response) return successResponse(res, quota.response, requestId);
 
-    const ctx = { dateContext, eventHit, eventPhase, humanizeEnabled, prompts: settings.prompts };
+    const ctx = { dateContext, eventHit, eventPhase, humanizeEnabled, prompts: settings.prompts, recentOpenings };
     const generation = await generateValidatedOutput({ mood, text, source, requestId, mode: dataMode, ctx });
     if (!generation.ok) {
       await markReceipt(quota.receiptId, 'failed');
@@ -175,6 +177,8 @@ router.post('/', async (req, res) => {
 async function generateValidatedOutput({ mood, text, source, requestId, mode, ctx }) {
   // 生效提示词配置：校验/重试口径与 prompt 同源（后台改条数后整链路一致）
   const promptCfg = ctx && ctx.prompts && typeof ctx.prompts === 'object' ? ctx.prompts : DEFAULT_PROMPTS;
+  // 近 14 天开头指纹去重集合（校验用）；注入列表在 buildSystemPrompt 内另取近 7 天前 10 条
+  const recentOpeningSet = Array.from(new Set(((ctx && ctx.recentOpenings) || []).map((entry) => entry.opening)));
   let lastFailure = { kind: 'invalid_output', reason: 'not_generated' };
   for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt += 1) {
     const messages = [
@@ -196,6 +200,7 @@ async function generateValidatedOutput({ mood, text, source, requestId, mode, ct
       humanize: !ctx || ctx.humanizeEnabled !== false,
       anchorNumbers: collectAnchorNumbers(ctx),
       line_count: promptCfg.line_count,
+      recentOpenings: recentOpeningSet,
     });
     console.log('[ai-cheer] model completed', { requestId, attempt, totalTokens: result?.usage?.total_tokens });
     if (validation.ok) return { ok: true, output: validation.output };
@@ -341,6 +346,11 @@ function buildSystemPrompt(mood, source, mode = 'season', ctx = {}) {
     // few-shot 示例池（后台标定，0-20 条）：仅语气与角度参考，禁止照抄
     parts.push(`参考示例（仅语气与角度参考，禁止照抄原文与其中数字）：\n${promptCfg.few_shot_examples.map((s) => `- ${s}`).join('\n')}`);
   }
+  // 历史开头避开列表（v1.1.0 Task 4）：近 7 天去重前 10 条，防模型失忆重复起笔
+  const recentOpeningsList = dedupeOpenings(ctx.recentOpenings);
+  if (recentOpeningsList.length) {
+    parts.push(`以下开头最近用过，请避开（换角度起笔，不要只在开头换几个字）：\n${recentOpeningsList.map((s) => `- ${s}`).join('\n')}`);
+  }
   if (ctx.dateContext) {
     // 事件提示三档映射（v1.1.0）：倒数/临场/当天 → 强必含；预热 preview → 轻提软必含；无事件 → 通用软提示
     const phaseName = ctx.eventHit && ctx.eventPhase ? ctx.eventPhase.phase : null;
@@ -359,6 +369,7 @@ function buildSystemPrompt(mood, source, mode = 'season', ctx = {}) {
       event_text: eventAnchor ? eventAnchor.text : '',
       date_label: ctx.dateContext.dateLabel,
       anchors_text: ctx.dateContext.anchors.map((a) => a.text).join('；'),
+      recent_openings: recentOpeningsList.join('、'),
     });
     // 渲染残留（占位符打错）时回退模板原文：保存层已拦截，运行时双保险
     parts.push(
@@ -422,6 +433,13 @@ function inspectGeneratedOutput(output, source, opts = {}) {
     const ai = checkAiFlavor(output.lines);
     if (ai) {
       return { ok: false, kind: 'invalid_output', reason: 'ai_flavor', ai };
+    }
+  }
+  // 历史开头指纹查重（v1.1.0 Task 4）：与近 14 天任一输出开头 8 字重复 → 拒绝并重试
+  if (Array.isArray(opts.recentOpenings) && opts.recentOpenings.length) {
+    const opening = extractOpening(output.lines);
+    if (opening && opts.recentOpenings.includes(opening)) {
+      return { ok: false, kind: 'invalid_output', reason: 'repeat_opening', opening };
     }
   }
   const safeOutput = { lines: output.lines, emoji_caption: output.emoji_caption || '⭐️ 并肩前行，为无言加油！' };
@@ -502,6 +520,9 @@ function buildRetryInstruction(failure, promptCfg = {}) {
   if (failure.reason === 'ai_flavor') {
     const detail = (failure.ai && failure.ai.detail) || '句式雷同/口号化';
     return `上一次文案有 AI 腔（${detail}）。请全部重新生成：拆散句式、减少感叹号、让 ${lineCount} 条文案的角度和开头都不一样、每条不少于 ${lineMinChars} 个字、去掉口号式总结；不要解释，只输出指定 JSON。`;
+  }
+  if (failure.reason === 'repeat_opening') {
+    return `上一次文案的开头「${failure.opening || '…'}」与最近用过的开头重复。请全部重新生成，换一个全新的角度与开头起笔（不要只在原开头换几个字）；不要解释，只输出指定 JSON。`;
   }
   if (failure.kind === 'blocked_content') {
     return '上一次输出未通过内容安全检查。请全部重新生成正常、积极的粉丝应援文案；不要解释，只输出指定 JSON。';
@@ -591,6 +612,63 @@ function readLimit(name, fallback) {
   return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
+// ── 历史开头指纹（v1.1.0 Task 4 反重复）：注入避开列表 + 校验层拒绝重复开头 ──
+const OPENING_CHARS = 8;                 // 开头指纹长度（前 8 字）
+const RECENT_OPENINGS_INJECT_LIMIT = 10; // 注入 prompt 的开头列表上限，防 prompt 膨胀
+
+/**
+ * 提取一组文案的开头指纹：首行去前导标点后取前 8 字；首行过短（< 4 字）不作为指纹。
+ * @param {string[]} lines 生成的文案条目
+ * @returns {string} 开头指纹（可能为空串）
+ */
+function extractOpening(lines) {
+  const first = Array.isArray(lines) ? lines.find((line) => typeof line === 'string' && line.trim()) : '';
+  if (!first) return '';
+  const normalized = first.replace(LEADING_PUNCT, '').trim();
+  return normalized.length >= 4 ? normalized.slice(0, OPENING_CHARS) : '';
+}
+
+/**
+ * 取最近 N 天成功输出的开头指纹（按创建时间倒序）。
+ * DB 不可用/查询失败时返回空数组，不影响主流程。
+ * @param {string} subjectId 用户主体
+ * @param {number} [days=14] 回溯天数
+ * @returns {Promise<Array<{opening: string, created_at: string}>>}
+ */
+async function getRecentOpenings(subjectId, days = 14) {
+  try {
+    const cutoff = new Date(Date.now() - days * DAY_MS).toISOString();
+    const col = await collection('ai_reports');
+    const result = await col
+      .where({ subject_id: subjectId, module: 'aiCheer', created_at: command.gte(cutoff) })
+      .orderBy('created_at', 'desc')
+      .limit(50)
+      .get();
+    const openings = [];
+    for (const doc of result.data || []) {
+      const opening = extractOpening(doc.ai_output && doc.ai_output.lines);
+      if (opening) openings.push({ opening, created_at: doc.created_at });
+    }
+    return openings;
+  } catch (_) {
+    return []; // DB 不可用时跳过反重复，不影响主流程
+  }
+}
+
+/** 去重聚合：最新优先，上限 limit 条（注入用 10 条防 prompt 膨胀） */
+function dedupeOpenings(entries, limit = RECENT_OPENINGS_INJECT_LIMIT) {
+  const seen = new Set();
+  const list = [];
+  for (const entry of entries || []) {
+    const opening = entry && entry.opening;
+    if (!opening || seen.has(opening)) continue;
+    seen.add(opening);
+    list.push(opening);
+    if (list.length >= limit) break;
+  }
+  return list;
+}
+
 function normalizeSnapshotAt(value) {
   if (typeof value === 'string' && !Number.isNaN(Date.parse(value))) return new Date(value).toISOString();
   if (typeof value === 'number') return new Date(value).toISOString();
@@ -612,4 +690,7 @@ module.exports.__test = {
   checkAiFlavor,
   collectAnchorNumbers,
   getLatestOverview,
+  extractOpening,
+  dedupeOpenings,
+  getRecentOpenings,
 };
