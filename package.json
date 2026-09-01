@@ -10,7 +10,8 @@
     "migrate": "node scripts/migrate-data.js",
     "test": "node --test server/tests/*.test.js",
     "preview:ai-cheer": "node --env-file=.env scripts/preview-ai-cheer.js",
-    "dev:admin": "node scripts/dev-admin.js"
+    "dev:admin": "node scripts/dev-admin.js",
+    "report:cheer-dup": "node --env-file=.env scripts/cheer-dup-report.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
