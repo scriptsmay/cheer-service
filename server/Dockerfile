@@ -23,6 +23,8 @@ RUN pip3 install --break-system-packages \
 
 COPY server/src/ ./server/src/
 COPY server/public/ ./server/public/
+# 运维脚本纳入镜像：重复率周报等需在容器内连生产 Mongo 执行（宿主机无法解析 mongodb 服务名）
+COPY scripts/ ./scripts/
 
 EXPOSE 3000
 
