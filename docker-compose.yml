@@ -52,6 +52,7 @@ services:
     restart: "no"
 
   api:
+    image: cheer-service-api:v1.1.0
     build:
       context: .
       dockerfile: server/Dockerfile
