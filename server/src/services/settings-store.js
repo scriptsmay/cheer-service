@@ -146,6 +146,12 @@ const PROMPT_INT_FIELDS = {
   line_min_chars: [5, 100],
   event_min_lines_preview: [0, 10],
   event_min_lines_strong: [0, 10],
+  candidate_count: [1, 3],
+};
+// 采样惩罚参数（v1.1.0 Task 6）：浮点，OpenAI 兼容范围 0-2
+const PROMPT_FLOAT_FIELDS = {
+  frequency_penalty: [0, 2],
+  presence_penalty: [0, 2],
 };
 const LINE_TARGET_RANGE_RE = /^\d{1,4}\s*-\s*\d{1,4}$/u;
 
@@ -158,6 +164,9 @@ function mergePromptConfig(raw) {
     }
     for (const [field, [min, max]] of Object.entries(PROMPT_INT_FIELDS)) {
       if (Number.isInteger(raw[field]) && raw[field] >= min && raw[field] <= max) merged[field] = raw[field];
+    }
+    for (const [field, [min, max]] of Object.entries(PROMPT_FLOAT_FIELDS)) {
+      if (typeof raw[field] === 'number' && Number.isFinite(raw[field]) && raw[field] >= min && raw[field] <= max) merged[field] = raw[field];
     }
     if (typeof raw.line_target_range === 'string' && LINE_TARGET_RANGE_RE.test(raw.line_target_range)) {
       merged.line_target_range = raw.line_target_range.replace(/\s/gu, '');
@@ -203,6 +212,12 @@ async function setCheerPrompts(patch) {
     if (body[field] === undefined) continue;
     if (!Number.isInteger(body[field]) || body[field] < min || body[field] > max) {
       errors.push(`${field}: 必须为 ${min}-${max} 的整数`);
+    }
+  }
+  for (const [field, [min, max]] of Object.entries(PROMPT_FLOAT_FIELDS)) {
+    if (body[field] === undefined) continue;
+    if (typeof body[field] !== 'number' || !Number.isFinite(body[field]) || body[field] < min || body[field] > max) {
+      errors.push(`${field}: 必须为 ${min}-${max} 的数字`);
     }
   }
   if (body.line_target_range !== undefined

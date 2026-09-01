@@ -193,6 +193,9 @@ router.post('/', async (req, res) => {
     }
     // 提示词版本追溯（v1.1.0）：0 = 代码默认，≥1 = 后台自定义版本（可归因/可回滚）
     reportDoc.prompt_version = settings.prompts ? settings.prompts.version || 0 : 0;
+    // 反重复可观测性（v1.1.0）：本组角色分工与多候选模式，供重复率周报统计角色覆盖率
+    if (generation.roles) reportDoc.roles = generation.roles;
+    if (generation.candidates > 1) reportDoc.candidate_count = generation.candidates;
     await aiReportsCol.doc(reportId).set(reportDoc);
 
     const usageCol = await collection('usage_limits');
@@ -221,6 +224,9 @@ async function generateValidatedOutput({ mood, text, source, requestId, mode, ct
     hasStats: Array.isArray(source.refs) && source.refs.length > 0,
   });
   let lastFailure = { kind: 'invalid_output', reason: 'not_generated' };
+  // 多候选（v1.1.0 Task 6，默认 1）：单次尝试内生成 N 个候选，首个通过校验者胜出（成本 ×N，免费期零负担）
+  const candidateCount = Number.isInteger(promptCfg.candidate_count) && promptCfg.candidate_count >= 1
+    ? Math.min(promptCfg.candidate_count, 3) : 1;
   for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt += 1) {
     const messages = [
       { role: 'system', content: buildSystemPrompt(mood, source, mode, ctx) },
@@ -228,26 +234,37 @@ async function generateValidatedOutput({ mood, text, source, requestId, mode, ct
     ];
     if (attempt > 1) messages.push({ role: 'user', content: buildRetryInstruction(lastFailure, promptCfg) });
 
-    let result;
-    try {
-      result = await generateText({ messages, temperature: 0.85, jsonMode: true });
-    } catch (error) {
-      lastFailure = { kind: 'model_error', reason: getErrorMessage(error) };
-      console.warn('[ai-cheer] model attempt failed', { requestId, attempt, message: lastFailure.reason });
-      continue;
+    const candidateResults = [];
+    for (let c = 0; c < candidateCount; c += 1) {
+      try {
+        candidateResults.push(await generateText({
+          messages,
+          temperature: 0.85,
+          jsonMode: true,
+          frequency_penalty: promptCfg.frequency_penalty,
+          presence_penalty: promptCfg.presence_penalty,
+        }));
+      } catch (error) {
+        lastFailure = { kind: 'model_error', reason: getErrorMessage(error) };
+        console.warn('[ai-cheer] model attempt failed', { requestId, attempt, candidate: c + 1, message: lastFailure.reason });
+      }
     }
+    if (!candidateResults.length) continue; // 全部候选模型错误，进入下一次重试
 
-    const validation = inspectGeneratedOutput(parseGeneratedText(result && result.text), source, {
-      humanize: !ctx || ctx.humanizeEnabled !== false,
-      anchorNumbers: collectAnchorNumbers(ctx),
-      line_count: promptCfg.line_count,
-      recentOpenings: recentOpeningSet,
-    });
-    console.log('[ai-cheer] model completed', { requestId, attempt, totalTokens: result?.usage?.total_tokens });
-    if (validation.ok) return { ok: true, output: validation.output };
-
-    lastFailure = validation;
-    console.warn('[ai-cheer] output rejected', { requestId, attempt, reason: validation.reason });
+    let attemptFailure = null;
+    for (const result of candidateResults) {
+      const validation = inspectGeneratedOutput(parseGeneratedText(result && result.text), source, {
+        humanize: !ctx || ctx.humanizeEnabled !== false,
+        anchorNumbers: collectAnchorNumbers(ctx),
+        line_count: promptCfg.line_count,
+        recentOpenings: recentOpeningSet,
+      });
+      console.log('[ai-cheer] model completed', { requestId, attempt, totalTokens: result?.usage?.total_tokens });
+      if (validation.ok) return { ok: true, output: validation.output, roles, candidates: candidateCount };
+      attemptFailure = validation;
+      console.warn('[ai-cheer] output rejected', { requestId, attempt, reason: validation.reason });
+    }
+    lastFailure = attemptFailure || lastFailure;
   }
   return { ok: false, failure: lastFailure };
 }

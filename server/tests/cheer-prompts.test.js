@@ -184,6 +184,21 @@ describe('settings-store — prompts 存取（mock DB）', () => {
     await assert.rejects(() => store.setCheerPrompts({ few_shot_examples: new Array(21).fill('x') }), /最多 20 条/);
   });
 
+  test('采样参数（v1.1.0 Task 6）：candidate_count/penalties 校验与默认值', async () => {
+    const store = await loadStore();
+    const defaults = await store.getCheerPrompts();
+    assert.strictEqual(defaults.candidate_count, 1, '多候选默认关');
+    assert.strictEqual(defaults.frequency_penalty, 0);
+    assert.strictEqual(defaults.presence_penalty, 0);
+    const saved = await store.setCheerPrompts({ candidate_count: 3, frequency_penalty: 0.5, presence_penalty: 0.3 });
+    assert.strictEqual(saved.candidate_count, 3);
+    assert.strictEqual(saved.frequency_penalty, 0.5);
+    assert.strictEqual(saved.presence_penalty, 0.3);
+    await assert.rejects(() => store.setCheerPrompts({ candidate_count: 5 }), /candidate_count/);
+    await assert.rejects(() => store.setCheerPrompts({ frequency_penalty: 3 }), /frequency_penalty/);
+    await assert.rejects(() => store.setCheerPrompts({ presence_penalty: 'x' }), /presence_penalty/);
+  });
+
   test('resetCheerPrompts：删配置回代码默认（version 归 0）', async () => {
     const store = await loadStore();
     await store.setCheerPrompts({ event_preview_hint: '自定义 {{event_min_lines}}' });

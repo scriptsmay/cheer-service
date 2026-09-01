@@ -15,9 +15,11 @@ const { getEffectiveConfig } = require('./ai-config');
  * @param {Array}  opts.messages   - 对话消息数组
  * @param {number} opts.temperature - 温度 (默认 0.85)
  * @param {boolean} opts.jsonMode   - 是否强制 JSON 输出
+ * @param {number} [opts.frequency_penalty] - 频率惩罚（v1.1.0 Task 6，可选，经 prompts 配置下发）
+ * @param {number} [opts.presence_penalty]  - 存在惩罚（v1.1.0 Task 6，可选）
  * @returns {Promise<{text: string, usage: Object}>}
  */
-async function generateText({ messages, temperature = 0.85, jsonMode = false }) {
+async function generateText({ messages, temperature = 0.85, jsonMode = false, frequency_penalty, presence_penalty }) {
   const { baseUrl, apiKey, model } = getEffectiveConfig();
 
   const body = {
@@ -25,6 +27,10 @@ async function generateText({ messages, temperature = 0.85, jsonMode = false }) 
     messages,
     temperature,
   };
+
+  // 采样惩罚参数仅在显式提供且为有限数字时下发（0 值也下发，保证后台调参可观测）
+  if (Number.isFinite(frequency_penalty)) body.frequency_penalty = frequency_penalty;
+  if (Number.isFinite(presence_penalty)) body.presence_penalty = presence_penalty;
 
   if (jsonMode) {
     body.response_format = { type: 'json_object' };

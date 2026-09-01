@@ -107,6 +107,10 @@ const DEFAULT_PROMPTS = {
   event_strong_hint: '今日赛事是本次文案的核心素材：{{line_count}} 条文案中至少 {{event_min_lines}} 条要自然体现这一赛事语境（倒计时、临场期待或当日应援均可），\n倒计时可以直接使用今日背景中给出的天数；其余文案保持日常陪伴感，不要每条都写赛事。',
   event_preview_hint: '今日背景中的赛事处于预热期：{{line_count}} 条文案中至少 {{event_min_lines}} 条要轻提赛事（一句带过即可，如"还有 N 天"），其余保持日常；\n倒数天数每条文案最多出现一次，不要 {{line_count}} 条全挂倒数，也不要把预热写成临场氛围。',
   date_context_hint: '可以自然地融入节气/节日氛围或今日赛事，但每条文案最多提及一次时间语境，不要为了塞日期破坏口语感，也不要写成天气预报或赛事播报。',
+  // 采样参数（v1.1.0 Task 6）：0 起步观察，后台可调；candidate_count > 1 时一次生成多候选校验择优（免费期零负担，出免费期建议回 1）
+  frequency_penalty: 0,
+  presence_penalty: 0,
+  candidate_count: 1,
   few_shot_examples: [],
 };
 
