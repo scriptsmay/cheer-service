@@ -73,9 +73,24 @@ describe('resolveEventPhase — 事件档位边界矩阵', () => {
     }
   });
 
-  test('预热期非里程碑日不命中（T-9 / T-8）', () => {
-    assert.strictEqual(dc.resolveEventPhase(EVENT_ASIAN_GAMES, '2026-09-19'), null, 'T-9 非里程碑');
-    assert.strictEqual(dc.resolveEventPhase(EVENT_ASIAN_GAMES, '2026-09-20'), null, 'T-8 非里程碑');
+  test('预热期非里程碑日命中 preview 且 milestone:false（v1.1.0 全窗口可见）', () => {
+    // T-29/28/27（预热前段）与 T-9/8（预热后段，旧版在此返回 null）
+    for (const [dateStr, daysUntil] of [
+      ['2026-08-30', 29], ['2026-08-31', 28], ['2026-09-01', 27], ['2026-09-19', 9], ['2026-09-20', 8],
+    ]) {
+      const result = dc.resolveEventPhase(EVENT_ASIAN_GAMES, dateStr);
+      assert.ok(result, `T-${daysUntil} 应命中 preview（日期 ${dateStr}）`);
+      assert.strictEqual(result.phase, 'preview');
+      assert.strictEqual(result.daysUntil, daysUntil);
+      assert.strictEqual(result.milestone, false, `T-${daysUntil} 非里程碑日，milestone 应为 false`);
+    }
+  });
+
+  test('T-7 边界：预热与倒数分界（T-8 preview / T-7 countdown）', () => {
+    assert.strictEqual(dc.resolveEventPhase(EVENT_ASIAN_GAMES, '2026-09-20')?.phase, 'preview', 'T-8 属预热期');
+    const t7 = dc.resolveEventPhase(EVENT_ASIAN_GAMES, '2026-09-21');
+    assert.strictEqual(t7.phase, 'countdown', 'T-7 起进入倒数档');
+    assert.strictEqual(t7.milestone, true);
   });
 
   test('倒数期每天命中（T-7 ~ T-2）', () => {
@@ -164,6 +179,16 @@ describe('getDateContext — 时间锚点注入', () => {
   test('dateLabel 格式（无前导零 + 中文星期）', () => {
     const ctx = dc.getDateContext('2026-09-28', null, null);
     assert.strictEqual(ctx.dateLabel, '9月28日 星期一');
+  });
+
+  test('预热非里程碑日事件锚点注入（v1.1.0：T-26 也有赛事锚点，含倒数天数）', () => {
+    const phase = dc.resolveEventPhase(EVENT_ASIAN_GAMES, '2026-09-02');
+    assert.strictEqual(phase.phase, 'preview');
+    assert.strictEqual(phase.milestone, false);
+    const ctx = dc.getDateContext('2026-09-02', phase, EVENT_ASIAN_GAMES);
+    const eventAnchor = ctx.anchors.find((a) => a.kind === 'event');
+    assert.ok(eventAnchor, '预热日应注入 event 锚点');
+    assert.ok(eventAnchor.text.includes('26'), `锚点文案应含倒数天数 26，实际：${eventAnchor.text}`);
   });
 
   test('事件命中时注入 event 锚点', () => {

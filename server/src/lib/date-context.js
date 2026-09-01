@@ -22,7 +22,8 @@ const JIE_QI_NEAR_DAYS = 3;
 const FESTIVAL_LOOKAHEAD_DAYS = 7;
 const DEFAULT_LEAD_DAYS = 30;
 const WEEK_NAMES = ['日', '一', '二', '三', '四', '五', '六'];
-// 预热期只在这些里程碑日强注入，避免连续 30 天每天喊倒计时
+// 预热期里程碑日（milestone:true 强注入标记）：T-lead / T-20 / T-15 / T-10；
+// 其余预热日轻提命中（milestone:false），避免回到「事件连续多日完全不可见」的老问题
 const MILESTONE_DAYS = [20, 15, 10];
 
 // 公历节日白名单：lunar-javascript 的 solar.getFestivals() 会返回大量冷门公历日
@@ -86,8 +87,8 @@ function toSolar(dateStr) {
  * @param {{date:string, leadDays?:number}} event 事件（cheer_events 文档）
  * @param {string} todayStr 'YYYY-MM-DD'
  * @returns {null | {phase:'preview'|'countdown'|'eve'|'today', daysUntil:number, milestone:boolean}}
- *   - 窗口外 / 已过期 / 预热期非里程碑日 → null（不命中，不注入）
- *   - 预热里程碑日 → { phase:'preview', milestone:true }
+ *   - 窗口外 / 已过期 → null（不命中，不注入）
+ *   - 预热期（8 ≤ daysUntil ≤ leadDays）→ { phase:'preview' }：里程碑日 milestone:true，其余日 milestone:false
  */
 function resolveEventPhase(event, todayStr) {
   if (!event || typeof event.date !== 'string') return null;
@@ -99,11 +100,13 @@ function resolveEventPhase(event, todayStr) {
   if (daysUntil === 0) return { phase: 'today', daysUntil, milestone: true };
   if (daysUntil === 1) return { phase: 'eve', daysUntil, milestone: true };
   if (daysUntil <= 7) return { phase: 'countdown', daysUntil, milestone: true };
-  // 预热期：仅里程碑日命中
-  if (daysUntil === leadDays || MILESTONE_DAYS.includes(daysUntil)) {
-    return { phase: 'preview', daysUntil, milestone: true };
-  }
-  return null;
+  // 预热期全量命中 preview（v1.1.0 档位修复：此前仅里程碑日命中，其余预热日返回 null，
+  // 导致事件在预热窗口内连续多日完全不可见）；milestone 仅标记强注入的里程碑日
+  return {
+    phase: 'preview',
+    daysUntil,
+    milestone: daysUntil === leadDays || MILESTONE_DAYS.includes(daysUntil),
+  };
 }
 
 /**
