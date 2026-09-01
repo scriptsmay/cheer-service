@@ -340,7 +340,7 @@ router.post('/sync/crawl', requireAuth, async (req, res) => {
 });
 
 // ── 管理页面（无需鉴权，页面内自带登录逻辑）──
-// 前端已拆分为 public/admin.html + admin.css + admin.js，由 /admin-static 提供静态资源
+// 前端为自包含 public/admin.html（v1.1.0 起按原型蓝本单文件落地，DEMO 已移除）
 const path = require('path');
 const ADMIN_HTML = path.join(__dirname, '..', '..', 'public', 'admin.html');
 router.get('/', (req, res) => {

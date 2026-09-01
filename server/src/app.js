@@ -56,7 +56,7 @@ app.use('/api/checkins', checkinRoute);
 // 运维接口
 app.use('/api/admin', adminRoute);
 
-// ── 静态资源（管理页面前端：admin.html / admin.css / admin.js）──
+// ── 静态资源（管理页面前端：自包含 admin.html；/admin-static 兼容保留）──
 // 与后端 API 分离，便于独立维护；HTML 由 GET /api/admin 以 sendFile 返回
 app.use('/admin-static', express.static(path.join(__dirname, '..', 'public')));
 

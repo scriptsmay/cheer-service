@@ -2,7 +2,7 @@
 /* ============================================================
  * dev-admin.js — 本地调试管理后台（前端本地，后端走线上）
  *
- * 场景：想本地改/看 server/public/admin.html(+css+js)，
+ * 场景：想本地改/看 server/public/admin.html（自包含单文件，v1.1.0 起无独立 css/js），
  *       但调用线上后端 https://api.kplwuyan.site/api。
  *
  * 原理：起一个本地 HTTP 服务——
