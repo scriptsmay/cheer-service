@@ -11,9 +11,9 @@
     设计思路四问：
     · Purpose：给 cheer-service 的唯一运维者（项目开发者本人）用，
       核心诉求是「打开先看清系统是否健康，要改的东西两步内到达」。
-    · Tone：深色电竞风运维控制台。视觉血统继承产品端既定品牌
-      （--bg #0a0e1a / 青色主色 #00d4ff / 橙色点缀 #ff9f4d，
-      来源：wuyan-cloudbase-project plans/ai-cheer-web-prd.md），
+    · Tone：浅色运维控制台（v1.1.1 用户决策：后台与深色的前台区分，
+      浅底深字更适长时间操作；主色改 cyan-700 #0e7490 保 AA 对比度，
+      品牌仍为青色系；原深色方案 #0a0e1a/#00d4ff/#ff9f4d 归档于原型），
       数据、key、cron 一律等宽字体，克制、精密、无装饰噪音。
     · Constraints：原生 JS 单文件、零外部依赖（无 CDN 字体/图标），
       直接兼容现有 Express 后端接口与鉴权流程；中文系统字体栈；
@@ -25,7 +25,7 @@
     演示模式（v1.1.0 已移除）：正式接入后端，所有数据来自 /api/admin/* 真实接口；
     登录走 /api/auth/login，Token 存 localStorage，401 自动回登录页。
   -->
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2300d4ff'/%3E%3Cpath d='M17 21l6.5 22L32 27l8.5 16L47 21' stroke='%23071018' stroke-width='5.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230e7490'/%3E%3Cpath d='M17 21l6.5 22L32 27l8.5 16L47 21' stroke='%23ffffff' stroke-width='5.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="/admin-static/admin.css" />
 </head>
 <body>
@@ -35,7 +35,7 @@
   <div id="loginPanel" hidden>
     <main class="login-wrap">
       <div class="login-brand">
-        <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#00d4ff"/><path d="M17 21l6.5 22L32 27l8.5 16L47 21" stroke="#071018" stroke-width="5.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#0e7490"/><path d="M17 21l6.5 22L32 27l8.5 16L47 21" stroke="#ffffff" stroke-width="5.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <div><b>Wuyan Cheer</b><span>管理后台</span></div>
       </div>
       <div class="login-card">
@@ -62,7 +62,7 @@
   <div id="adminPanel" hidden>
     <aside class="sidebar">
       <div class="brand">
-        <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#00d4ff"/><path d="M17 21l6.5 22L32 27l8.5 16L47 21" stroke="#071018" stroke-width="5.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#0e7490"/><path d="M17 21l6.5 22L32 27l8.5 16L47 21" stroke="#ffffff" stroke-width="5.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <div><b>Wuyan Cheer</b><span>管理后台</span></div>
       </div>
       <nav class="nav" aria-label="后台导航">
@@ -99,7 +99,7 @@
     <div class="topbar">
       <div class="topbar-row1">
         <div class="brand">
-          <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#00d4ff"/><path d="M17 21l6.5 22L32 27l8.5 16L47 21" stroke="#071018" stroke-width="5.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#0e7490"/><path d="M17 21l6.5 22L32 27l8.5 16L47 21" stroke="#ffffff" stroke-width="5.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <div><b>Wuyan Cheer</b><span>管理后台</span></div>
         </div>
         <button class="btn btn-ghost btn-sm" id="logoutBtnM" type="button">
