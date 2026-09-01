@@ -262,7 +262,7 @@ function parseArgs(args) {
     useData: true,
     dataFile: '',
     mode: '',
-    showPrompt: true,
+    showPrompt: false,
     help: false,
     baseUrl: '',
     apiKey: '',
