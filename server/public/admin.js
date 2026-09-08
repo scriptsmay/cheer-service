@@ -153,13 +153,42 @@ async function saveConfig() {
     toast(escapeHtml(d.error || '保存失败'), 'error');
   }
 }
+async function testCurrentAI() {
+  const el = document.getElementById('curTestResult');
+  const btn = document.getElementById('curTestAiBtn');
+  el.innerHTML = '<div class="result info"><span class="spinner"></span>测试中，请稍候…</div>';
+  btn.disabled = true;
+  const r = await api('POST', '/api/admin/ai/test', {});
+  btn.disabled = false;
+  if (!r) { el.innerHTML = ''; return; }
+  const d = await r.json();
+  if (d.ok) {
+    el.innerHTML = '<div class="result success test-grid">'
+      + '<span>状态</span><b>连接成功</b>'
+      + '<span>延迟</span><b>' + escapeHtml(String(d.latency_ms)) + ' ms</b>'
+      + '<span>模型</span><b>' + escapeHtml(d.model || '') + '</b>'
+      + '<span>回复</span><span>' + escapeHtml(d.reply || '') + '</span>'
+      + '<span>Tokens</span><span>' + escapeHtml(JSON.stringify(d.usage)) + '</span>'
+      + '</div>';
+  } else {
+    el.innerHTML = '<div class="result error"><b>连接失败</b>'
+      + (d.latency_ms ? '（' + escapeHtml(String(d.latency_ms)) + ' ms）' : '')
+      + (d.status ? ' HTTP ' + escapeHtml(String(d.status)) : '')
+      + '<br>' + escapeHtml(d.error || '未知错误') + '</div>';
+  }
+}
+
 async function testAI() {
   const el = document.getElementById('testResult');
-  el.innerHTML = '<div class="result info"><span class="spinner"></span>测试中，请稍候…</div>';
-  const body = {};
   const url = document.getElementById('inpUrl').value.trim();
   const key = document.getElementById('inpKey').value.trim();
   const model = document.getElementById('inpModel').value.trim();
+  if (!url && !key && !model) {
+    el.innerHTML = '<div class="result error">请至少填写一项再测试；如需测试当前配置，请使用上方「测试当前连通性」按钮。</div>';
+    return;
+  }
+  el.innerHTML = '<div class="result info"><span class="spinner"></span>测试中，请稍候…</div>';
+  const body = {};
   if (url) body.baseUrl = url;
   if (key) body.apiKey = key;
   if (model) body.model = model;
@@ -777,8 +806,20 @@ function bindEvents() {
 
   document.getElementById('saveConfigBtn').addEventListener('click', saveConfig);
   document.getElementById('testAiBtn').addEventListener('click', testAI);
+  document.getElementById('curTestAiBtn').addEventListener('click', testCurrentAI);
   document.getElementById('fetchModelsBtn').addEventListener('click', fetchModelList);
   document.getElementById('curModelsBtn').addEventListener('click', fetchModelsForCurrent);
+
+  // 表单有值才启用「测试连接」按钮
+  function syncTestAiBtn() {
+    const hasVal = document.getElementById('inpUrl').value.trim()
+      || document.getElementById('inpKey').value.trim()
+      || document.getElementById('inpModel').value.trim();
+    document.getElementById('testAiBtn').disabled = !hasVal;
+  }
+  ['inpUrl', 'inpKey', 'inpModel'].forEach((id) =>
+    document.getElementById(id).addEventListener('input', syncTestAiBtn)
+  );
 
   document.getElementById('dateCtxEnabled').addEventListener('change', saveCheerSettings);
   document.getElementById('humanizeEnabled').addEventListener('change', saveCheerSettings);
