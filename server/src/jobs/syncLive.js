@@ -3,6 +3,17 @@
 /**
  * syncLive job — ← sync-live
  * 每日 05:00，拉取直播记录写入 MongoDB
+ *
+ * ⚠️ 本 job 当前**未注册进调度器**（server/src/jobs/scheduler.js 只注册
+ * kpl_crawl / kpl_live / weekly_story / cleanup_ai），因此不会被执行；
+ * GET /api/live 返回的是 live_streams 中的历史数据，不再更新。
+ *
+ * 未注册的原因：本 job 依赖 `config.dataBaseUrl`（`DATA_BASE_URL` 环境变量），
+ * 而该变量在 .env.example / .env.deploy.example / docker-compose.yml 中均未提供，
+ * env.js 的默认值为空字符串，会使 API_BASE 退化为非法相对路径、请求必然失败。
+ *
+ * 如需恢复：① 在部署环境配置 `DATA_BASE_URL`（指向提供 GET /api/streams 的服务）；
+ * ② 在 scheduler.js 中重新注册本 job。
  */
 
 const { collection } = require('../db/mongo');

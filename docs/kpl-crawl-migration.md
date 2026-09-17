@@ -8,7 +8,13 @@ kpl-data-daily 当前通过 GitHub Actions `daily-fetch.yml` cron (`16 1 * * *` 
 
 cheer-service 已有 node-cron 定时基础设施（部署在腾讯云 Docker），且 `syncScheduleLive` 已在直接调用 KPL API，具备接管采集的条件。
 
-**注意**: cheer-service 原有 `syncData`/`syncSchedule`/`syncLive` 三个 cron job 依赖 `DATA_BASE_URL` (原默认值 `cal.kplwuyan.site`)，该域名不存在且从未有过静态站点部署，导致三个 job 长期静默失败。实际数据仅通过 GH Actions POST `/api/admin/sync/*` 推送。这三个 job 已在迁移前禁用以修复问题。
+**注意**: cheer-service 原有 `syncData`/`syncSchedule`/`syncLive` 三个 cron job 依赖 `DATA_BASE_URL`（`server/src/config/env.js:48` 取 `process.env.DATA_BASE_URL || ''`），该变量在部署配置样例中不存在——`.env.example`、`.env.deploy.example`、`docker-compose.yml` 三处均无此变量，空值下 `API_BASE` 退化为非法相对路径，请求必然失败，三个 job 因此长期静默失败。实际数据仅通过 GH Actions POST `/api/admin/sync/*` 推送。`syncData`/`syncSchedule` 已在本次迁移中改为读容器内挂载文件；`syncLive` 在迁移前被禁用，**至今未重新注册进调度器**。
+
+> **勘误（2026-09 复核）**：
+>
+> 1. 上文原表述「`cal.kplwuyan.site` 域名不存在且从未有过静态站点部署」**不成立**——该域名现有站点在线，其 `GET /api/streams?year=&month=` 接口正常返回直播数据。`syncLive` 无法工作的直接原因是 `DATA_BASE_URL` 未配置，而非域名不存在。
+> 2. `syncLive` 不在调度器中：`server/src/jobs/scheduler.js` 仅注册 `kpl_crawl`、`kpl_live`（→`syncScheduleLive`）、`weekly_story`、`cleanup_ai` 四项。因此 **`GET /api/live` 返回的是不再更新的历史数据**——`live_streams` 集合在 CloudBase 迁移清单内（`scripts/migrate-data.js:22`），现有记录来自迁移期导入。如需恢复：配置 `DATA_BASE_URL`，并把 `syncLive` 重新注册进调度器。
+> 3. 下文时间线中的 `03:00`/`04:00`/`05:00`/`06:00` 为本次迁移当时的计划值，不代表现行调度；现行 cron 以 `server/src/jobs/schedules.js` 为准，且可被 `app_config.scheduler_settings` 在运行时覆盖。
 
 ## 架构变化
 
@@ -19,8 +25,8 @@ cheer-service 已有 node-cron 定时基础设施（部署在腾讯云 Docker）
     ├── python fetch-schedule.py
     └── HTTP POST              → cheer-service /api/admin/sync/*
   cheer-service cron
-    ├── syncData 04:00         ❌ 静默失败 (cal.kplwuyan.site 不存在)
-    └── syncSchedule 06:00     ❌ 静默失败 (cal.kplwuyan.site 不存在)
+    ├── syncData 04:00         ❌ 静默失败 (DATA_BASE_URL 未配置)
+    └── syncSchedule 06:00     ❌ 静默失败 (DATA_BASE_URL 未配置)
 
 迁移后:
   cheer-service cron (node-cron, 可靠)
@@ -197,7 +203,7 @@ cron.schedule('0 3 * * *', async () => {
 ```
 03:00  syncKplCrawl    ← python main.py + fetch-schedule.py + git push
 04:00  syncData        ← 读本地文件入库 (原 HTTP 拉取)
-05:00  syncLive        ← 不变
+05:00  syncLive        ← ⚠️ 迁移后被禁用，未注册进调度器（见上方勘误 2）
 06:00  syncSchedule    ← 读本地文件入库 (原 HTTP 拉取)
 ```
 

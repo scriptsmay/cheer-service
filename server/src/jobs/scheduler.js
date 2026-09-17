@@ -19,6 +19,10 @@ const { cleanupAiReports } = require('./cleanupAiReports');
 const { CRON, assertValidCron } = require('./schedules');
 const { getSchedulerSettings } = require('../services/settings-store');
 
+// 注：jobs/syncLive.js 未在此导入、也不注册进调度器——它依赖部署中未提供的
+// DATA_BASE_URL（见 server/src/config/env.js），迁移前即被禁用。详见该文件头部说明
+// 与 docs/kpl-crawl-migration.md 的勘误段。
+
 // key → cron.ScheduledTask
 const tasks = new Map();
 // 已在执行的任务名集合，用于防止长任务重叠触发

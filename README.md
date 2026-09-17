@@ -55,7 +55,7 @@ cheer-service/
 │   │       ├── syncData.js         # 本地数据文件 → MongoDB
 │   │       ├── syncSchedule.js     # 本地赛程文件 → MongoDB
 │   │       ├── syncScheduleLive.js # 比赛窗口内实时赛程同步
-│   │       ├── syncLive.js         # 直播数据同步
+│   │       ├── syncLive.js         # 直播数据同步（⚠️ 已禁用，未注册进调度器，见 docs/kpl-crawl-migration.md 勘误）
 │   │       ├── weeklyStory.js      # AI 周故事卡生成
 │   │       └── cleanupAiReports.js # 过期 AI 报告清理
 │   ├── Dockerfile
