@@ -8,6 +8,7 @@
  */
 
 const { getEffectiveConfig } = require('./ai-config');
+const config = require('../config/env');
 
 /**
  * 调用 OpenAI 兼容的 /chat/completions 端点
@@ -43,7 +44,7 @@ async function generateText({ messages, temperature = 0.85, jsonMode = false, fr
       'Authorization': `Bearer ${apiKey}`,
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(60000),
+    signal: AbortSignal.timeout(config.aiTimeoutMs || 180000),
   });
 
   if (!response.ok) {

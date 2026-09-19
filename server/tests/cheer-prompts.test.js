@@ -399,20 +399,24 @@ describe('getRecentOpenings — 近 14 天指纹查询（mock DB）', () => {
   }
 
   test('按 created_at 倒序返回指纹；只统计同 subject 且 module=aiCheer', async () => {
-    seedReport('r1', { subjectId: 'u1', createdAt: '2026-08-30T01:00:00.000Z', lines: ['翻出旧录像又看了一遍真的绝'] });
-    seedReport('r2', { subjectId: 'u1', createdAt: '2026-09-01T01:00:00.000Z', lines: ['今天也要加油呀朋友们'] });
-    seedReport('r3', { subjectId: 'u2', createdAt: '2026-09-01T02:00:00.000Z', lines: ['别人的开头不应出现才对呀'] });
-    seedReport('r4', { subjectId: 'u1', createdAt: '2026-09-01T03:00:00.000Z', lines: ['早起打卡元气满满的一天'], module: 'other' });
+    const tRecent2 = new Date(Date.now() - 2 * 86400000).toISOString();
+    const tRecent1 = new Date(Date.now() - 1 * 86400000).toISOString();
+    seedReport('r1', { subjectId: 'u1', createdAt: tRecent2, lines: ['翻出旧录像又看了一遍真的绝'] });
+    seedReport('r2', { subjectId: 'u1', createdAt: tRecent1, lines: ['今天也要加油呀朋友们'] });
+    seedReport('r3', { subjectId: 'u2', createdAt: tRecent1, lines: ['别人的开头不应出现才对呀'] });
+    seedReport('r4', { subjectId: 'u1', createdAt: tRecent1, lines: ['早起打卡元气满满的一天'], module: 'other' });
     const cheer = await loadCheer();
     const openings = await cheer.getRecentOpenings('u1', 14);
     assert.deepStrictEqual(openings.map((e) => e.opening), ['今天也要加油呀朋', '翻出旧录像又看了'], '倒序且只含 u1 的 aiCheer 记录');
   });
 
   test('超出回溯窗口（14 天前）的记录不返回', async () => {
-    seedReport('old', { subjectId: 'u1', createdAt: '2026-08-01T00:00:00.000Z', lines: ['太久远的开头不算数呀'] });
-    seedReport('new', { subjectId: 'u1', createdAt: '2026-08-25T00:00:00.000Z', lines: ['最近的开头要算数才行'] });
+    const tOld = new Date(Date.now() - 30 * 86400000).toISOString();
+    const tNew = new Date(Date.now() - 2 * 86400000).toISOString();
+    seedReport('old', { subjectId: 'u1', createdAt: tOld, lines: ['太久远的开头不算数呀'] });
+    seedReport('new', { subjectId: 'u1', createdAt: tNew, lines: ['最近的开头要算数才行'] });
     const cheer = await loadCheer();
-    // 相对 now 回溯 14 天：old（08-01）超出、new（08-25）在窗口内（以测试运行日 2026-09 初计）
+    // 相对 now 回溯 14 天：old（30天前）超出、new（2天前）在窗口内
     const openings = await cheer.getRecentOpenings('u1', 14);
     assert.ok(openings.every((e) => e.opening !== '太久远的开头不算'), '窗口外记录不应返回');
     assert.ok(openings.some((e) => e.opening === '最近的开头要算数'), '窗口内记录应返回');

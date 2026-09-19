@@ -14,6 +14,7 @@ const config = {
   aiBaseUrl: process.env.AI_BASE_URL || 'https://api.deepseek.com/v1',
   aiApiKey: process.env.AI_API_KEY || '',
   aiModel: process.env.AI_MODEL || 'deepseek-chat',
+  aiTimeoutMs: parseInt(process.env.AI_TIMEOUT_MS || '180000', 10),
 
   // JWT 鉴权
   jwtSecret: process.env.JWT_SECRET || 'dev_secret_change_me',
