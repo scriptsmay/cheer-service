@@ -1,5 +1,6 @@
 # cheer-service CNB 流水线配置
 # main push: 仅构建测试，不部署
+# web_trigger_release: 网页「发版部署」按钮触发（.cnb/web_trigger.yml），打 tag 后自动走 tag_push 部署
 # tag_push: 构建测试 + 部署（正式发布，顺序执行）
 
 main:
@@ -16,13 +17,13 @@ main:
       imports:
         - https://cnb.cool/scriptsmay/deploy-secrets/-/blob/main/cheer-service.yml
       stages:
-        # 1. 安装依赖
-        - name: install
+        - &stage-install
+          name: install
           script: |
             npm ci
 
-        # 2. 运行测试
-        - name: test
+        - &stage-test
+          name: test
           script: |
             npm test
 
@@ -38,6 +39,61 @@ main:
         #     echo "镜像已就绪: ${IMAGE_TAG}"
         #   exports:
         #     IMAGE_TAG: CNB_IMAGE_TAG
+
+  # 网页「发版部署」按钮（.cnb/web_trigger.yml）：
+  # 单测门禁（anchor 复用上方 install/test stage）→ 版本号远端实查（手填或留空 patch+1，查重失败即报错）
+  # → 打 annotated tag 推 CNB → 自动触发下方 tag_push 构建部署。
+  # 本事件只用内置 CNB_TOKEN（可信事件，repo-code:rw），不 import 密钥仓库，无需 allow_events 授权。
+  web_trigger_release:
+    - name: release-tag
+      runner:
+        cpus: 4
+      docker:
+        image: node:20
+      env:
+        NODE_ENV: test
+      stages:
+        - *stage-install
+        - *stage-test
+        - name: tag-and-push
+          script: |
+            set -e
+            REPO_URL="https://cnb:${CNB_TOKEN}@cnb.cool/scriptsmay/cheer-service.git"
+
+            # 版本号以远端实查为准（剥离 ^{} peel 行），不信任本地
+            RAW_TAGS="$(git ls-remote --tags "${REPO_URL}" 'v*')"
+            REMOTE_TAGS="$(printf '%s\n' "${RAW_TAGS}" | awk -F'/' '{print $NF}' | grep -v '\^{}' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)"
+            echo "远端现有 v* tag: $(printf '%s' "${REMOTE_TAGS}" | tr '\n' ' ')"
+
+            if [ -n "${VERSION}" ]; then
+              # 手填：校验格式
+              printf '%s\n' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+                || { echo "手填版本号格式不合法: '${VERSION}'（应为 vX.Y.Z）"; exit 1; }
+              NEW_TAG="${VERSION}"
+            else
+              # 留空：取远端最新 v* tag patch+1
+              LATEST="$(printf '%s\n' "${REMOTE_TAGS}" | sort -V | tail -n 1)"
+              if [ -z "${LATEST}" ]; then
+                NEW_TAG="v0.0.1"
+              else
+                MAJOR="$(printf '%s' "${LATEST}" | cut -d. -f1 | tr -d 'v')"
+                MINOR="$(printf '%s' "${LATEST}" | cut -d. -f2)"
+                PATCH="$(printf '%s' "${LATEST}" | cut -d. -f3)"
+                NEW_TAG="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+                echo "自动发版: 远端最新 ${LATEST} → ${NEW_TAG}"
+              fi
+            fi
+
+            # 查重：同名 tag 已存在直接失败，不静默跳过
+            if printf '%s\n' "${REMOTE_TAGS}" | grep -Fxq "${NEW_TAG}"; then
+              echo "tag 已存在于远端，拒绝重复发版: ${NEW_TAG}"; exit 1
+            fi
+
+            git config user.name "cnb-web-trigger"
+            git config user.email "cnb-web-trigger@cnb.cool"
+            git tag -a "${NEW_TAG}" -m "release ${NEW_TAG} (web trigger)"
+            git push "${REPO_URL}" "refs/tags/${NEW_TAG}"
+            echo "已推送 tag ${NEW_TAG}，tag_push 流水线将自动构建并部署"
 
 # 打标签时部署（正式发布）
 $:

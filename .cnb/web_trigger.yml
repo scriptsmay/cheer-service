@@ -1,0 +1,17 @@
+# cheer-service 网页按钮配置
+# 仓库页面点「发版部署」→ 触发 .cnb.yml 的 web_trigger_release 事件流水线（打 tag 自动发版）
+# 注意：本文件不支持 imports，密钥只能写在 .cnb.yml 的事件流水线里
+branch:
+  - reg: ^main$
+    buttons:
+      - name: 发版部署
+        event: web_trigger_release
+        description: 自动打 version tag 推送，触发既有 tag_push 流水线构建并部署（部署进度见 tag_push 构建记录）；版本号留空则自动 +1 patch
+        permissions:
+          roles: [owner, master]
+        inputs:
+          VERSION:
+            name: 版本号
+            description: "留空 = 远端最新 v* tag patch +1；或填完整版本号，如 v1.2.1"
+            type: input
+            placeholder: v1.2.1
