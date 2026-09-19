@@ -5,9 +5,9 @@ RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.cloud.tencent.com|g' /etc/apk/repos
     apk upgrade --no-cache && \
     apk add --no-cache python3 py3-pip git openssh-client tzdata
 
-# 预置 github.com 的 SSH host key, 避免容器内首次 git push 卡在 host key 确认(spawn 无 tty 会失败)
-# 写到 /etc/ssh/ssh_known_hosts, 所有用户全局生效, 不依赖运行时 HOME
-RUN ssh-keyscan -t rsa,ecdsa,ed25519 github.com > /etc/ssh/ssh_known_hosts
+# 运行时已通过 GIT_SSH_COMMAND 配置 StrictHostKeyChecking=accept-new
+# 首次 git push 时会自动接受 github.com 的 host key，无需构建时预置
+# 原 ssh-keyscan github.com 会访问 22 端口，CNB 构建环境禁止
 
 WORKDIR /app
 
