@@ -124,12 +124,16 @@ cheer-service/
 export MONGO_PASSWORD=your_secure_password
 
 # 构建并启动
-docker compose up -d
+docker compose up -d --build
 
 # MongoDB 副本集会自动初始化（通过 healthcheck）
 # 等待约 30 秒后验证
 curl http://localhost:3000/api/health
 ```
+
+本地构建：`docker compose up -d --build`（强制重建 api 镜像，不使用 `image:` 字段里的远程镜像）。
+只拉取已发布镜像时用 `docker compose up -d`：此时从 CNB 制品库拉取 `CHEER_SERVICE_IMAGE`
+（默认 `docker.cnb.cool/scriptsmay/cheer-service:latest`），需先 `docker login docker.cnb.cool -u cnb`。
 
 Docker 镜像基于 `node:22-alpine`，内置 Python 3 + git，支持容器内直接运行 kpl-data-daily 爬虫。API 服务映射端口 `19091:3000`。
 
@@ -144,7 +148,26 @@ cp .env.deploy.example .env.deploy
 ./deploy.sh
 ```
 
-`deploy.sh` 会自动完成：SSH 连通性检查 → 同步 kpl-data-daily 代码 → 打包上传源码 → 远程重建容器 → 健康检查。
+`deploy.sh` 会自动完成：SSH 连通性检查 → 同步 kpl-data-daily 代码 → 打包上传源码 → **在远程服务器本地构建镜像**（`docker compose build api`）→ 切换容器 → 健康检查。
+
+> `deploy.sh` 走的是远程 build 路径，不依赖镜像仓库；`docker-compose.yml` 里 `image:` 只是构建产物的本地标签名。
+> 需要按 tag 回滚时在 `.env.deploy` 里设置 `CHEER_SERVICE_IMAGE`（自定义 tag 时请保证远程已存在该镜像）。
+
+### CI 自动部署（main 分支 push）
+
+`.cnb.yml` 的 `deploy` pipeline 与 `deploy.sh` 职责不同，**只做「同步 compose + 换镜像重启容器」**：
+
+1. 自检远端部署目录存在、可写，且已有 `.env`（`.env` 属运行时状态，CI 不覆盖，需人工维护）；
+2. 把仓库里的 `docker-compose.yml` 同步到远端 —— 校验含 `CHEER_SERVICE_IMAGE` 且 `docker compose config -q` 通过后，用 `.new` + `mv` 原子替换；
+3. 拉取本次构建镜像 `${CNB_DOCKER_REGISTRY}/scriptsmay/cheer-service:${CNB_COMMIT_SHORT}`，以 `CHEER_SERVICE_IMAGE` 显式指定后重启 `api` 容器。
+
+因此**仓库是 `docker-compose.yml` 的唯一事实来源**，改完直接 push 即生效；但以下内容 CI 不会同步，改动了仍需手工 `deploy.sh`：
+
+- `.env`（含 `MONGO_PASSWORD`、密钥等，CI 不碰）
+- `logs/` 与 bind mount 数据目录
+- 除 `docker-compose.yml` 以外的仓库文件（如 `deploy.sh`、`server/` 源码 —— 镜像已把源码打进去）
+
+同步只覆盖 `docker-compose.yml`，不会波及上述状态文件。
 
 ## API 接口
 
@@ -251,6 +274,7 @@ npm test
 |------|------|
 | `MONGO_URI` | MongoDB 连接字符串（需包含 `replicaSet=rs0`） |
 | `MONGO_PASSWORD` | MongoDB root 密码（Docker 部署用） |
+| `CHEER_SERVICE_IMAGE` | api 服务使用的镜像（默认 `docker.cnb.cool/scriptsmay/cheer-service:latest`） |
 | `JWT_SECRET` | JWT 签名密钥 |
 | `AI_BASE_URL` | OpenAI 兼容 API 地址（默认 DeepSeek） |
 | `AI_API_KEY` | AI 服务 API Key |
