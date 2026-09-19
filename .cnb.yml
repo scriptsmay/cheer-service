@@ -81,6 +81,7 @@ $:
 
         # 4. 部署到远程服务器
         - name: deploy
+          image: alpine:latest
           script: |
             apk add --no-cache openssh-client
             mkdir -p ~/.ssh
@@ -119,6 +120,7 @@ $:
 
         # 5. 健康检查
         - name: health-check
+          image: alpine:latest
           script: |
             apk add --no-cache curl
             for i in $(seq 1 30); do
@@ -134,6 +136,7 @@ $:
       # 失败时回滚
       failStages:
         - name: rollback
+          image: alpine:latest
           script: |
             apk add --no-cache openssh-client
             mkdir -p ~/.ssh
