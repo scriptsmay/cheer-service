@@ -61,7 +61,7 @@ app.use('/api/admin', adminRoute);
 app.use('/admin-static', express.static(path.join(__dirname, '..', 'public')));
 
 // ── 健康检查 ──
-const pkgInfo = require('../package.json');
+const pkgInfo = require('../../package.json');
 app.get('/api/health', async (req, res) => {
   try {
     const db = await getDb();
