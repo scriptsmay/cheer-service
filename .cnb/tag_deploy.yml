@@ -1,0 +1,4 @@
+# Tag 部署配置
+environments:
+  - name: production
+    env: { tag_name: $CNB_BRANCH }
