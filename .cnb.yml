@@ -1,0 +1,82 @@
+# cheer-service CNB 流水线配置
+# 功能：main 分支 push 自动测试 + 构建，手动触发部署
+
+main:
+  push:
+    - name: ci-and-build
+      runner:
+        cpus: 4
+      docker:
+        image: node:20
+      services:
+        - docker
+      env:
+        NODE_ENV: test
+      imports:
+        - https://cnb.cool/scriptsmay/secrets/-/blob/main/cheer-service.yml
+      stages:
+        # 1. 安装依赖
+        - name: install
+          script: |
+            npm ci
+
+        # 2. 运行测试
+        - name: test
+          script: |
+            npm test
+
+        # 3. 构建 Docker 镜像
+        - name: build-image
+          script: |
+            echo "${CNB_DOCKER_REGISTRY}" | docker login --username=${CNB_TOKEN_USER_NAME} --password-stdin ${CNB_DOCKER_REGISTRY}
+            IMAGE_TAG="${CNB_DOCKER_REGISTRY}/scriptsmay/cheer-service:${CNB_COMMIT_SHORT}"
+            docker build -t ${IMAGE_TAG} -f server/Dockerfile .
+            docker push ${IMAGE_TAG}
+            echo "##[set-output IMAGE_TAG=${IMAGE_TAG}]"
+          exports:
+            IMAGE_TAG: BUILD_IMAGE_TAG
+
+    - name: deploy
+      runner:
+        cpus: 2
+      docker:
+        image: alpine:latest
+      services:
+        - docker
+      imports:
+        - https://cnb.cool/scriptsmay/secrets/-/blob/main/cheer-service.yml
+      stages:
+        # 部署到远程服务器
+        - name: deploy
+          script: |
+            apk add --no-cache openssh-client
+            mkdir -p ~/.ssh
+            echo "${DEPLOY_SSH_KEY}" | tr -d '\r' > ~/.ssh/id_rsa
+            chmod 600 ~/.ssh/id_rsa
+            ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts 2>/dev/null || true
+            ssh ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} "cd ${DEPLOY_DIR} && docker compose pull api && docker compose down api && docker compose up -d api && docker image prune -f"
+
+        # 健康检查
+        - name: health-check
+          script: |
+            apk add --no-cache curl
+            for i in $(seq 1 30); do
+              if curl -sf --max-time 5 "${HEALTH_URL}" >/dev/null 2>&1; then
+                echo "Health check passed"
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "Health check failed"
+            exit 1
+
+      # 失败时回滚
+      failStages:
+        - name: rollback
+          script: |
+            apk add --no-cache openssh-client
+            mkdir -p ~/.ssh
+            echo "${DEPLOY_SSH_KEY}" | tr -d '\r' > ~/.ssh/id_rsa
+            chmod 600 ~/.ssh/id_rsa
+            ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts 2>/dev/null || true
+            ssh ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} "cd ${DEPLOY_DIR} && docker compose down api && docker compose up -d api"
