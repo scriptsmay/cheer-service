@@ -8,7 +8,7 @@
 const express = require('express');
 const { randomUUID } = require('node:crypto');
 const { collection, runTransaction, command } = require('../db/mongo');
-const { generateText } = require('../services/ai');
+const { generateText, generateTextStream } = require('../services/ai');
 const { resolveIdentity } = require('../services/identity');
 const { successResponse, errorResponse } = require('../services/response');
 const { isContentBlocked } = require('../lib/ai-utils');
@@ -205,6 +205,258 @@ router.post('/', async (req, res) => {
   } catch (error) {
     console.error('[ai-cheer] request failed', { requestId, message: getErrorMessage(error) });
     return errorResponse(res, 503, 'WRITE_FAILED', '服务暂时不可用，请稍后重试', requestId);
+  }
+});
+
+// ── SSE 流式输出端点 ──
+// 用于突破 Cloudflare 100s 同步超时限制，支持深度思考大模型
+router.post('/stream', async (req, res) => {
+  const requestId = getRequestId(req);
+
+  const identity = await resolveIdentity(req);
+  if (!identity.ok) {
+    res.status(401).json({ error: 'SESSION_REQUIRED', message: '匿名会话无效或已过期', request_id: requestId });
+    return;
+  }
+
+  const body = req.body || {};
+  const moodInput = typeof body.mood === 'string' ? body.mood.toLowerCase() : 'daily';
+  const mood = MOOD_ALIASES[moodInput] || moodInput;
+  const text = typeof body.text === 'string' ? body.text.trim() : '';
+  const clientId = normalizeClientId(body.client_id || body._cid || 'unknown');
+
+  if (!ALLOWED_MOODS.has(mood) || textLength(text) > 120 || !isValidClientId(clientId)) {
+    res.status(400).json({ error: 'INVALID_ARGUMENT', message: '心情、补充文字或 client_id 不合法', request_id: requestId });
+    return;
+  }
+  if (isContentBlocked(text)) {
+    res.status(451).json({ error: 'CONTENT_BLOCKED', message: '补充文字未通过内容安全检查', request_id: requestId });
+    return;
+  }
+
+  // 设置 SSE 响应头
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Request-Id': requestId,
+    // 禁用压缩，确保每个 chunk 即时推送
+    'X-Accel-Buffering': 'no',
+    'X-Content-Type-Options': 'nosniff',
+  });
+
+  // 发送初始连接确认
+  res.write(`event: connected\ndata: {"request_id":"${requestId}"}\n\n`);
+
+  let keepaliveTimer = null;
+  let isFinished = false;
+  let retryCount = 0;
+  const MAX_RETRIES = 2;
+
+  // 15s 心跳保活，防止 Cloudflare 100s 超时
+  function startKeepalive() {
+    keepaliveTimer = setInterval(() => {
+      if (isFinished) return;
+      res.write(':keepalive\n\n');
+    }, 15000);
+  }
+
+  function stopKeepalive() {
+    if (keepaliveTimer) {
+      clearInterval(keepaliveTimer);
+      keepaliveTimer = null;
+    }
+  }
+
+  function sendEvent(event, data) {
+    if (isFinished) return;
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  }
+
+  async function runGeneration() {
+    try {
+      const settings = await getCheerSettings();
+      const dataMode = settings.mode;
+      const overview = dataMode === 'emotion' ? null : await getLatestOverview();
+      const source = buildGroundedSource(overview, dataMode);
+      const todayStr = shanghaiDate().date;
+
+      let eventHit = null;
+      let eventPhase = null;
+      if (settings.event_context_enabled !== false) {
+        const hits = await getActiveEventsForDate(todayStr);
+        if (hits.length) {
+          eventHit = hits[0];
+          eventPhase = eventHit.phase;
+        }
+      }
+      let dateContext = null;
+      if (settings.date_context_enabled !== false) {
+        const avoidText = await getLastEventText(identity.subjectId);
+        dateContext = getDateContext(todayStr, eventPhase, eventHit, avoidText);
+      }
+      const humanizeEnabled = settings.humanize_enabled !== false;
+      const recentOpenings = await getRecentOpenings(identity.subjectId, 14);
+
+      if (eventPhase && eventPhase.phase !== 'preview' && eventHit) {
+        addRef(source.refs, eventHit.refs_label || '今日赛事', eventHit.refs_value || eventHit.title, 'cheer_events');
+        source.promptLines = source.refs.map((r) => `${r.label}：${r.value}`);
+      }
+
+      const idempotencyKey = normalizeRequestId(req.headers?.['x-request-id'] || requestId);
+      const quota = await consumeAiQuota({
+        subjectId: identity.subjectId,
+        ipHash: hashValue(getClientIp(req), config.ipHashSalt),
+        requestId: idempotencyKey,
+        date: shanghaiDate().date,
+      });
+
+      if (!quota.allowed) {
+        sendEvent('error', { code: 'RATE_LIMITED', message: '今日应援生成额度已用完' });
+        return false;
+      }
+      if (quota.response) {
+        // 已有缓存结果，直接返回
+        sendEvent('complete', quota.response);
+        return true;
+      }
+
+      const ctx = { dateContext, eventHit, eventPhase, humanizeEnabled, prompts: settings.prompts, recentOpenings, date: todayStr };
+      const promptCfg = ctx.prompts && typeof ctx.prompts === 'object' ? ctx.prompts : DEFAULT_PROMPTS;
+      const lineCount = Number.isInteger(promptCfg.line_count) ? promptCfg.line_count : CHEER_LINE_COUNT;
+      const roles = assignRoles({
+        dateStr: todayStr,
+        lineCount,
+        hasEvent: Boolean(ctx.eventHit && ctx.eventPhase),
+        isPreview: Boolean(ctx.eventPhase && ctx.eventPhase.phase === 'preview'),
+        hasStats: Array.isArray(source.refs) && source.refs.length > 0,
+      });
+
+      // 构建 prompt
+      const messages = [
+        { role: 'system', content: buildSystemPrompt(mood, source, dataMode, ctx) },
+        { role: 'user', content: buildUserPrompt(mood, text, source, roles, promptCfg) },
+      ];
+
+      // 开始流式生成
+      let collectedText = '';
+      let collectedReasoning = '';
+      let lastChunkTime = Date.now();
+
+      startKeepalive();
+
+      await generateTextStream({
+        messages,
+        temperature: 0.85,
+        jsonMode: true,
+        frequency_penalty: promptCfg.frequency_penalty,
+        presence_penalty: promptCfg.presence_penalty,
+        onChunk: (chunk) => {
+          lastChunkTime = Date.now();
+          if (chunk.type === 'reasoning') {
+            collectedReasoning += chunk.data;
+            sendEvent('thinking', { text: collectedReasoning });
+          } else if (chunk.type === 'content') {
+            collectedText += chunk.data;
+            // 实时提取行内容发送
+            const lines = collectedText.split('\n');
+            for (const line of lines) {
+              if (line.trim()) {
+                sendEvent('chunk', { text: line });
+              }
+            }
+          } else if (chunk.type === 'keepalive') {
+            // 心跳已在定时器发送，跳过
+          }
+        },
+      });
+
+      stopKeepalive();
+
+      // 解析并校验完整输出
+      const parsed = parseGeneratedText(collectedText);
+      const validation = inspectGeneratedOutput(parsed, source, {
+        humanize: !ctx || ctx.humanizeEnabled !== false,
+        anchorNumbers: collectAnchorNumbers(ctx),
+        line_count: promptCfg.line_count,
+        recentOpenings: Array.isArray(recentOpenings) ? recentOpenings.map((r) => r.opening) : [],
+      });
+
+      if (validation.ok) {
+        // 校验通过，落库保存
+        const safeOutput = validation.output;
+        const reportId = randomUUID();
+        const now = new Date();
+        const sourceSnapshotAt = source.snapshotAt || now.toISOString();
+
+        const payload = {
+          lines: safeOutput.lines,
+          emoji_caption: safeOutput.emoji_caption,
+          report_id: reportId,
+          refs: source.refs,
+          source_snapshot_at: sourceSnapshotAt,
+        };
+
+        const aiReportsCol = await collection('ai_reports');
+        const reportDoc = {
+          report_id: reportId,
+          module: 'aiCheer',
+          status: 'active',
+          data_mode: dataMode,
+          subject_id: identity.subjectId,
+          client_id_hash: hashValue(clientId, config.ipHashSalt),
+          user_input: { mood, text_summary: text.slice(0, 40) },
+          ai_output: safeOutput,
+          refs: source.refs,
+          source_snapshot_at: sourceSnapshotAt,
+          timestamp: now.getTime(),
+          created_at: now.toISOString(),
+          expires_at: new Date(now.getTime() + 30 * DAY_MS).toISOString(),
+        };
+        if (dateContext) {
+          reportDoc.date_context = {
+            date_label: dateContext.dateLabel,
+            anchors: dateContext.anchors,
+          };
+        }
+        if (eventHit && eventPhase) {
+          reportDoc.event_hit = eventHit._id;
+          reportDoc.event_phase = eventPhase.phase;
+          reportDoc.event_days_until = eventPhase.daysUntil;
+        }
+        reportDoc.prompt_version = settings.prompts ? settings.prompts.version || 0 : 0;
+        if (roles) reportDoc.roles = roles;
+        await aiReportsCol.doc(reportId).set(reportDoc);
+
+        const usageCol = await collection('usage_limits');
+        await usageCol.doc(quota.receiptId).update({ status: 'success', response: payload, updated_at: now.toISOString() });
+
+        sendEvent('complete', payload);
+        return true;
+      } else {
+        // 校验失败，重试
+        if (retryCount < MAX_RETRIES) {
+          retryCount += 1;
+          sendEvent('retry', { message: '检测到部分数据偏差，正在为你重新润色...', attempt: retryCount });
+          return await runGeneration();
+        } else {
+          sendEvent('error', { code: 'AI_OUTPUT_INVALID', message: '生成格式不稳定，请稍后重试' });
+          return false;
+        }
+      }
+    } catch (error) {
+      console.error('[ai-cheer-stream] request failed', { requestId, message: getErrorMessage(error) });
+      sendEvent('error', { code: 'WRITE_FAILED', message: '服务暂时不可用，请稍后重试' });
+      return false;
+    }
+  }
+
+  try {
+    await runGeneration();
+  } finally {
+    isFinished = true;
+    stopKeepalive();
+    res.end();
   }
 });
 

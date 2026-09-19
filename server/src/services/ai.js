@@ -65,4 +65,129 @@ async function generateText({ messages, temperature = 0.85, jsonMode = false, fr
   };
 }
 
-module.exports = { generateText };
+/**
+ * 流式调用 OpenAI 兼容的 /chat/completions 端点
+ * @param {Object} opts
+ * @param {Array}  opts.messages   - 对话消息数组
+ * @param {number} opts.temperature - 温度 (默认 0.85)
+ * @param {boolean} opts.jsonMode   - 是否强制 JSON 输出
+ * @param {number} [opts.frequency_penalty] - 频率惩罚
+ * @param {number} [opts.presence_penalty]  - 存在惩罚
+ * @param {Function} [opts.onChunk] - 收到 chunk 时的回调 (chunk: {type: 'reasoning'|'content'|'complete', data: string, fullText?: string}) => void
+ * @param {number} [opts.keepaliveIntervalMs] - 心跳保活间隔 (默认 15000ms)
+ * @returns {Promise<{text: string, usage: Object, reasoning: string}>}
+ */
+async function generateTextStream({ messages, temperature = 0.85, jsonMode = false, frequency_penalty, presence_penalty, onChunk, keepaliveIntervalMs = 15000 }) {
+  const { baseUrl, apiKey, model } = getEffectiveConfig();
+
+  const body = {
+    model,
+    messages,
+    temperature,
+    stream: true,
+  };
+
+  if (Number.isFinite(frequency_penalty)) body.frequency_penalty = frequency_penalty;
+  if (Number.isFinite(presence_penalty)) body.presence_penalty = presence_penalty;
+
+  if (jsonMode) {
+    body.response_format = { type: 'json_object' };
+  }
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(config.aiTimeoutMs || 180000),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`AI API error ${response.status}: ${err}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+  let fullText = '';
+  let reasoningText = '';
+  let usage = null;
+  let modelMeta = null;
+
+  // SSE 解析辅助函数
+  function parseSSELine(line) {
+    if (line.startsWith('data: ')) {
+      const data = line.slice(6);
+      if (data === '[DONE]') return { done: true };
+      try {
+        return { parsed: JSON.parse(data) };
+      } catch {
+        return null;
+      }
+    }
+    if (line.startsWith(':keepalive')) {
+      return { keepalive: true };
+    }
+    return null;
+  }
+
+  // 读取流
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || ''; // 保留不完整的行
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      const event = parseSSELine(trimmed);
+      if (!event) continue;
+      if (event.done) break;
+      if (event.keepalive) {
+        if (onChunk) onChunk({ type: 'keepalive' });
+        continue;
+      }
+      if (event.parsed) {
+        const chunk = event.parsed;
+        modelMeta = modelMeta || { model: chunk.model, created: chunk.created };
+        usage = usage || chunk.usage;
+
+        const choice = chunk.choices?.[0];
+        if (!choice) continue;
+
+        const delta = choice.delta || {};
+        const reasoningContent = delta.reasoning_content;
+        const content = delta.content;
+
+        if (reasoningContent) {
+          reasoningText += reasoningContent;
+          if (onChunk) onChunk({ type: 'reasoning', data: reasoningContent, fullText: reasoningText });
+        }
+
+        if (content) {
+          fullText += content;
+          if (onChunk) onChunk({ type: 'content', data: content, fullText });
+        }
+
+        if (choice.finish_reason === 'stop') {
+          usage = chunk.usage;
+        }
+      }
+    }
+  }
+
+  return {
+    text: fullText,
+    reasoning: reasoningText,
+    usage: usage || { total_tokens: 0, prompt_tokens: 0, completion_tokens: 0 },
+  };
+}
+
+module.exports = { generateText, generateTextStream };
