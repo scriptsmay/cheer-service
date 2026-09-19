@@ -32,9 +32,17 @@ main:
             IMAGE_TAG="${CNB_DOCKER_REGISTRY}/scriptsmay/cheer-service:${CNB_COMMIT_SHORT}"
             docker build -t ${IMAGE_TAG} -f server/Dockerfile .
             docker push ${IMAGE_TAG}
-            echo "##[set-output IMAGE_TAG=${IMAGE_TAG}]"
+            # 推送后立即验证 tag 可被拉取：把「镜像不存在」暴露在 build 阶段，
+            # 而不是等到 deploy 阶段才由 docker pull 报 "not found"（届时已难判断是构建没推成功还是竞态）
+            docker manifest inspect ${IMAGE_TAG} >/dev/null \
+              || { echo "镜像推送后无法在制品库检索到: ${IMAGE_TAG}"; exit 1; }
+            echo "镜像已就绪: ${IMAGE_TAG}"
+          # exports 的 key 是「导出到后续 Stage / Pipeline 的变量名」。
+          # 原写法 `IMAGE_TAG: BUILD_IMAGE_TAG` 会把值导出成 BUILD_IMAGE_TAG：
+          # 名字像内置变量（实际不是），而 deploy 阶段读的是 IMAGE_TAG，两边对不上，等于白导出。
+          # 需要跨 Pipeline 使用的导出名必须带 CNB_ 前缀（否则只在当前 Pipeline 内可见）。
           exports:
-            IMAGE_TAG: BUILD_IMAGE_TAG
+            IMAGE_TAG: CNB_IMAGE_TAG
 
     - name: deploy
       runner:
@@ -45,6 +53,13 @@ main:
         - docker
       imports:
         - https://cnb.cool/scriptsmay/deploy-secrets/-/blob/main/cheer-service.yml
+      # 部署串行化：默认同事件下多个 Pipeline 并发，push 密集时会出现
+      # 「后一次构建的部署先跑、前一次随后覆盖回去」以及共享 ssh known_hosts 互相干扰。
+      # wait: true 排队等待，cancel-in-wait: true 只保留最新排队的一条，避免部署堆积。
+      lock:
+        key: cheer-service-deploy
+        wait: true
+        cancel-in-wait: true
       stages:
         # 部署到远程服务器
         - name: deploy
@@ -81,15 +96,25 @@ main:
             "
 
             # ── 部署 ──
-            # 部署目标镜像与构建阶段保持一致，避免 compose 里的 image 字段指向 docker.io 上不存在的镜像
-            REMOTE_PULL_IMAGE="${CNB_DOCKER_REGISTRY}/scriptsmay/cheer-service:${CNB_COMMIT_SHORT}"
+            # 优先用 build-image 阶段导出的 IMAGE_TAG（导出名必须带 CNB_ 前缀才跨 Pipeline 可见，
+            # 见 .cnb.yml 构建阶段的 `exports: CNB_IMAGE_TAG`）；
+            # 兜底按同一规则重新推导，保证 deploy 单跑或导出缺失时行为不变。
+            REMOTE_PULL_IMAGE="${CNB_IMAGE_TAG:-${CNB_DOCKER_REGISTRY}/scriptsmay/cheer-service:${CNB_COMMIT_SHORT}}"
             echo "部署镜像: ${REMOTE_PULL_IMAGE}"
             # 1. 部署令牌经 ssh stdin 传给远端 docker login，避免出现在命令行/进程列表
             # 2. 必须先 pull 再 up：只 pull 不导出 CHEER_SERVICE_IMAGE 时 compose 仍读远端 .env，会拉错镜像
+            # docker pull 重试：镜像刚 push 完，制品库索引可能有秒级延迟，
+            # 观测到过 push 成功、紧随其后的 pull 仍报 "not found" 的情况。
+            # 重试 6 次（5s 起退避，最长约 2 分钟）可消除这类瞬时失败，不必人工重跑流水线。
             printf '%s' "${REGISTRY_DEPLOY_TOKEN}" | ssh -o BatchMode=yes ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} "
               cd ${DEPLOY_DIR} &&
               docker login docker.cnb.cool -u cnb --password-stdin &&
-              docker pull ${REMOTE_PULL_IMAGE} &&
+              for i in \$(seq 1 6); do
+                docker pull ${REMOTE_PULL_IMAGE} && PULLED=1 && break
+                echo \"第 \${i} 次 docker pull 失败，5s 后重试...\"
+                sleep 5
+              done &&
+              test -n \"\${PULLED:-}\" || { echo '镜像拉取重试耗尽，请确认构建阶段推送是否成功'; exit 1; } &&
               docker compose down api &&
               CHEER_SERVICE_IMAGE=${REMOTE_PULL_IMAGE} docker compose up -d api &&
               docker image prune -f
@@ -98,7 +123,12 @@ main:
         # 健康检查
         - name: health-check
           script: |
-            apk add --no-cache curl
+            apk add --no-cache curl openssh-client
+            mkdir -p ~/.ssh && chmod 700 ~/.ssh
+            printf '%s' "${DEPLOY_SSH_KEY_B64}" | base64 -d > ~/.ssh/id_rsa
+            chmod 600 ~/.ssh/id_rsa
+            ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts 2>/dev/null || true
+            # 最多约 60s（原 60s 等待 + 每个失败用例再叠加超时，实际很容易空转近 1 分钟）
             for i in $(seq 1 30); do
               if curl -sf --max-time 5 "${HEALTH_URL}" >/dev/null 2>&1; then
                 echo "Health check passed"
@@ -106,7 +136,9 @@ main:
               fi
               sleep 2
             done
-            echo "Health check failed"
+            echo "Health check failed，输出远端容器状态与日志便于定位："
+            ssh -o BatchMode=yes ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} \
+              "cd ${DEPLOY_DIR} && docker compose ps api && docker compose logs --tail=80 api" || true
             exit 1
 
       # 失败时回滚
