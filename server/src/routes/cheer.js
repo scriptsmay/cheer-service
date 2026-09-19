@@ -341,6 +341,7 @@ router.post('/stream', async (req, res) => {
       let collectedText = '';
       let collectedReasoning = '';
       let lastChunkTime = Date.now();
+      let lastSentLineCount = 0;
 
       startKeepalive();
 
@@ -357,13 +358,15 @@ router.post('/stream', async (req, res) => {
             sendEvent('thinking', { text: collectedReasoning });
           } else if (chunk.type === 'content') {
             collectedText += chunk.data;
-            // 实时提取行内容发送
+            // 只发送新增的行（避免重复累积）
             const lines = collectedText.split('\n');
-            for (const line of lines) {
+            const newLines = lines.slice(lastSentLineCount);
+            for (const line of newLines) {
               if (line.trim()) {
                 sendEvent('chunk', { text: line });
               }
             }
+            lastSentLineCount = lines.length;
           } else if (chunk.type === 'keepalive') {
             // 心跳已在定时器发送，跳过
           }

@@ -31,8 +31,8 @@ services:
             quit(1)
           }
         " --username wuyan --password ${MONGO_PASSWORD:-changeme_strong_password} --authenticationDatabase admin
-      # interval 不宜太短: 每次 mongosh 连接会让 mongo 记 5-7 行 INFO 日志(Connection accepted/metadata/auth/ended),
-      # 5s 间隔会把 docker compose logs -f 刷爆。30s 足够检测单节点副本集故障, start_period+retries 已覆盖启动期
+      # interval 不宜太短：每次 mongosh 连接会让 mongo 记 5-7 行 INFO 日志 (Connection accepted/metadata/auth/ended),
+      # 5s 间隔会把 docker compose logs -f 刷爆。30s 足够检测单节点副本集故障，start_period+retries 已覆盖启动期
       interval: 30s
       timeout: 10s
       retries: 20
@@ -61,12 +61,10 @@ services:
     ports:
       - "19091:3000"
     volumes:
-      - /root/kpl-data-daily:/app/kpl-data-daily
+      # kpl-data-daily 数据目录挂载（宿主机 systemd timer 负责采集+git push）
+      - /root/kpl-data-daily:/app/kpl-data-daily:rw
       - api-data:/app/data
       - ./logs:/app/logs
-      # kpl-data-daily SSH push: 挂载宿主机 deploy 私钥(只读), GIT_SSH_COMMAND 指定用它
-      # 宿主机需先生成 key 并把公钥加到 GitHub 仓库的 Deploy keys
-      - /root/.ssh/kpl_deploy_key:/root/.ssh/id_ed25519:ro
     env_file:
       - ./.env
     environment:
@@ -78,17 +76,8 @@ services:
       - OPENAI_API_KEY=${AI_API_KEY:-}
       - OPENAI_BASE_URL=${AI_BASE_URL:-https://api.deepseek.com/v1}
       - OPENAI_MODEL=${AI_MODEL:-deepseek-chat}
-      # kpl-data-daily Git 备份(SSH 模式不需要 GITHUB_TOKEN, 只需 GITHUB_REPO 构造 URL)
-      # GITHUB_TOKEN 仅在 GITHUB_PUSH_SSH=false 回退 HTTPS 时需要; SSH 模式忽略它
-      - GITHUB_REPO=${GITHUB_REPO:-}
-      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
-      - GITHUB_PUSH_SSH=${GITHUB_PUSH_SSH:-true}
-      - GIT_USER_NAME=${GIT_USER_NAME:-KPL Data Bot}
-      - GIT_USER_EMAIL=${GIT_USER_EMAIL:-bot@kplwuyan.site}
-      # Uptime Kuma push 心跳: kpl-crawl 每次执行完上报(见 jobs/syncKplCrawl.js)
+      # Uptime Kuma push 心跳：kpl-crawl 每次执行完上报 (见 jobs/syncKplCrawl.js)
       - UPTIME_PUSH_URL=${UPTIME_PUSH_URL:-}
-      # SSH push 认证: 用挂载的私钥, StrictHostKeyChecking=accept-new 兜底(Dockerfile 已预置 known_hosts)
-      - GIT_SSH_COMMAND=ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new
     depends_on:
       mongodb:
         condition: service_healthy
