@@ -21,13 +21,16 @@ const config = require('../config/env');
  * @returns {Promise<{text: string, usage: Object}>}
  */
 async function generateText({ messages, temperature = 0.85, jsonMode = false, frequency_penalty, presence_penalty }) {
-  const { baseUrl, apiKey, model } = getEffectiveConfig();
+  const { baseUrl, apiKey, model, thinkingBudget } = getEffectiveConfig();
 
   const body = {
     model,
     messages,
     temperature,
   };
+
+  // 思考预算（Qwen3 系经 LiteLLM 实测透传有效）：控制推理长度，降低耗时与 token 消耗
+  if (Number.isFinite(thinkingBudget)) body.thinking_budget = thinkingBudget;
 
   // 采样惩罚参数仅在显式提供且为有限数字时下发（0 值也下发，保证后台调参可观测）
   if (Number.isFinite(frequency_penalty)) body.frequency_penalty = frequency_penalty;
@@ -77,7 +80,7 @@ async function generateText({ messages, temperature = 0.85, jsonMode = false, fr
  * @returns {Promise<{text: string, usage: Object, reasoning: string}>}
  */
 async function generateTextStream({ messages, temperature = 0.85, jsonMode = false, frequency_penalty, presence_penalty, onChunk }) {
-  const { baseUrl, apiKey, model } = getEffectiveConfig();
+  const { baseUrl, apiKey, model, thinkingBudget } = getEffectiveConfig();
 
   const body = {
     model,
@@ -85,6 +88,8 @@ async function generateTextStream({ messages, temperature = 0.85, jsonMode = fal
     temperature,
     stream: true,
   };
+
+  if (Number.isFinite(thinkingBudget)) body.thinking_budget = thinkingBudget;
 
   if (Number.isFinite(frequency_penalty)) body.frequency_penalty = frequency_penalty;
   if (Number.isFinite(presence_penalty)) body.presence_penalty = presence_penalty;

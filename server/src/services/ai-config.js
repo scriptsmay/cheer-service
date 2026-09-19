@@ -35,13 +35,15 @@ function loadConfig() {
 
 /**
  * 保存 AI 配置到持久化文件
+ * 保留文件中的其他字段（如 thinking_budget），避免后台保存时丢失
  */
 function saveConfig({ baseUrl, apiKey, model }) {
   const dir = path.dirname(CONFIG_PATH);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  const data = { baseUrl, apiKey, model, updatedAt: new Date().toISOString() };
+  const file = loadConfig() || {};
+  const data = { ...file, baseUrl, apiKey, model, updatedAt: new Date().toISOString() };
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(data, null, 2));
   cached = data;
   cacheMtime = Date.now();
@@ -52,10 +54,14 @@ function saveConfig({ baseUrl, apiKey, model }) {
  */
 function getEffectiveConfig() {
   const file = loadConfig();
+  const envBudget = parseInt(process.env.AI_THINKING_BUDGET || '', 10);
   return {
     baseUrl:  file?.baseUrl || config.aiBaseUrl,
     apiKey:   file?.apiKey  || config.aiApiKey,
     model:    file?.model   || config.aiModel,
+    thinkingBudget: Number.isFinite(file?.thinking_budget)
+      ? file.thinking_budget
+      : (Number.isFinite(envBudget) ? envBudget : undefined),
     _source:  file ? 'file' : 'env',
   };
 }

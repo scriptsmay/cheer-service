@@ -344,7 +344,7 @@ router.post('/stream', async (req, res) => {
 
       startKeepalive();
 
-      await generateTextStream({
+      const streamResult = await generateTextStream({
         messages,
         temperature: 0.85,
         jsonMode: true,
@@ -426,6 +426,8 @@ router.post('/stream', async (req, res) => {
         }
         reportDoc.prompt_version = settings.prompts ? settings.prompts.version || 0 : 0;
         if (roles) reportDoc.roles = roles;
+        // 思考/生成 token 用量落库（观测思考强度与耗时用）
+        reportDoc.usage = streamResult.usage;
         await aiReportsCol.doc(reportId).set(reportDoc);
 
         await commitAiQuota({ pendingCounts: quota.pendingCounts });

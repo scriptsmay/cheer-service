@@ -15,11 +15,8 @@ const assert = require('node:assert/strict');
 
 const aiConfigPath = require.resolve('../src/services/ai-config');
 const aiConfig = require(aiConfigPath);
-aiConfig.getEffectiveConfig = () => ({
-  baseUrl: 'https://mock.local/v1',
-  apiKey: 'test-key',
-  model: 'test-model',
-});
+let effectiveConfig = { baseUrl: 'https://mock.local/v1', apiKey: 'test-key', model: 'test-model' };
+aiConfig.getEffectiveConfig = () => ({ ...effectiveConfig });
 
 // 每个用例可指定不同空闲阈值（env.js 在 require 时读取）
 function loadGenerateTextStream(idleMs) {
@@ -33,6 +30,7 @@ function loadGenerateTextStream(idleMs) {
 const encoder = new TextEncoder();
 const sse = (obj) => `data: ${JSON.stringify(obj)}\n\n`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let lastRequestBody = null;
 
 /**
  * 构造 mock fetch：返回 SSE Response。
@@ -43,6 +41,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function mockSseFetch(lines, { intervalMs = 0, holdOpen = false } = {}) {
   let streamController = null;
   let stopped = false;
+  lastRequestBody = null;
 
   const stream = new ReadableStream({
     start(c) {
@@ -62,6 +61,7 @@ function mockSseFetch(lines, { intervalMs = 0, holdOpen = false } = {}) {
   })();
 
   return async (_url, opts = {}) => {
+    lastRequestBody = opts.body;
     opts.signal?.addEventListener('abort', () => {
       stopped = true;
       streamController.error(opts.signal.reason ?? new Error('aborted'));
@@ -128,5 +128,18 @@ describe('generateTextStream', () => {
 
     const result = await generateTextStream({ messages: [], onChunk: () => {} });
     assert.equal(result.text, '第1行\n第2行\n第3行\n第4行\n第5行\n第6行\n');
+  });
+
+  test('thinking_budget 配置透传到请求体；未配置时不携带该字段', async () => {
+    effectiveConfig = { baseUrl: 'https://mock.local/v1', apiKey: 'test-key', model: 'test-model', thinkingBudget: 400 };
+    const generateTextStream = loadGenerateTextStream(1000);
+    globalThis.fetch = mockSseFetch(makeChunks());
+    await generateTextStream({ messages: [], onChunk: () => {} });
+    assert.equal(JSON.parse(lastRequestBody).thinking_budget, 400);
+
+    effectiveConfig = { baseUrl: 'https://mock.local/v1', apiKey: 'test-key', model: 'test-model' };
+    globalThis.fetch = mockSseFetch(makeChunks());
+    await generateTextStream({ messages: [], onChunk: () => {} });
+    assert.equal('thinking_budget' in JSON.parse(lastRequestBody), false);
   });
 });
