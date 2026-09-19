@@ -51,7 +51,8 @@ main:
           script: |
             apk add --no-cache openssh-client
             mkdir -p ~/.ssh
-            echo "${DEPLOY_SSH_KEY}" | tr -d '\r' > ~/.ssh/id_rsa
+            chmod 700 ~/.ssh
+            printf '%s' "${DEPLOY_SSH_KEY_B64}" | base64 -d > ~/.ssh/id_rsa
             chmod 600 ~/.ssh/id_rsa
             ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts 2>/dev/null || true
             ssh ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} "cd ${DEPLOY_DIR} && docker compose pull api && docker compose down api && docker compose up -d api && docker image prune -f"
@@ -76,7 +77,8 @@ main:
           script: |
             apk add --no-cache openssh-client
             mkdir -p ~/.ssh
-            echo "${DEPLOY_SSH_KEY}" | tr -d '\r' > ~/.ssh/id_rsa
+            chmod 700 ~/.ssh
+            printf '%s' "${DEPLOY_SSH_KEY_B64}" | base64 -d > ~/.ssh/id_rsa
             chmod 600 ~/.ssh/id_rsa
             ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts 2>/dev/null || true
             ssh ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} "cd ${DEPLOY_DIR} && docker compose down api && docker compose up -d api"
