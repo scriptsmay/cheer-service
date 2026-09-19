@@ -2,7 +2,10 @@
 
 /**
  * 定时任务定义 — scheduler.js 与 admin 状态接口共享的单一数据源
- * 避免 cron 表达式在多处重复硬编码，同时供管理页面展示采集时间
+ * 避免 cron 表达式在多处重复硬编码，同时供管理页面展示任务时间
+ *
+ * KPL 数据采集由宿主机 systemd timer 负责（业务分离），此处 cron 均为容器内
+ * 固定值，不提供运行时修改入口；调整采集/赛程节奏请改 kpl-data-daily 的 timer。
  */
 
 const cronParser = require('cron-parser');
@@ -10,9 +13,9 @@ const cronParser = require('cron-parser');
 const SCHEDULES = [
   {
     key: 'kpl_crawl',
-    name: 'KPL 全量采集',
+    name: 'KPL 数据同步',
     cron: '0 9 * * *',
-    description: '每天 09:00 触发 Python 爬虫采集赛季概览与赛程（频率可在管理页面调整）',
+    description: '每天 09:00 读取宿主机 timer 采集落盘的数据并同步到 MongoDB（采集节奏由宿主机 systemd timer 管理）',
     category: 'collection',
   },
   {
@@ -48,47 +51,19 @@ function getNextRun(cronExpr) {
   }
 }
 
-// 校验 cron 表达式合法性（同时用 cron-parser 与 node-cron validate 确保一致性）
-// cron-parser 比 node-cron 宽松（支持 L/#/?/W），而 node-cron 是实际调度器，
-// 二者都通过才合法，避免毒 cron 落库后重启时 cron.schedule 抛错导致服务崩溃
-const cron = require('node-cron');
-
-const MIN_INTERVAL_MS = 5 * 60 * 1000; // 5 分钟最小间隔
-
-function assertValidCron(cronExpr) {
-  // node-cron 校验（与调度器一致，拒绝 L/#/?/W 等不支持的语法）
-  if (!cron.validate(cronExpr)) {
-    throw new Error(`node-cron 不支持的 cron 表达式: ${cronExpr}`);
-  }
-  // cron-parser 校验并计算频率
-  const interval = cronParser.parseExpression(cronExpr, { tz: 'Asia/Shanghai' });
-  const t1 = interval.next().getTime();
-  const t2 = interval.next().getTime();
-  if (t2 - t1 < MIN_INTERVAL_MS) {
-    throw new Error(
-      `cron 执行间隔不能小于 5 分钟（当前约 ${Math.round((t2 - t1) / 1000)}秒）`
-    );
-  }
-  return cronExpr;
-}
-
 // 返回给前端的任务列表
-// overrides: { [key]: cronExpr } — 运行时（app_config）覆盖值，优先于 SCHEDULES 常量
-function getScheduleList(withNextRun = false, overrides = {}) {
-  return SCHEDULES.map((s) => {
-    const cronExpr = overrides[s.key] || s.cron;
-    return {
-      key: s.key,
-      name: s.name,
-      cron: cronExpr,
-      description: s.description,
-      category: s.category,
-      next_run: withNextRun ? getNextRun(cronExpr) : undefined,
-    };
-  });
+function getScheduleList(withNextRun = false) {
+  return SCHEDULES.map((s) => ({
+    key: s.key,
+    name: s.name,
+    cron: s.cron,
+    description: s.description,
+    category: s.category,
+    next_run: withNextRun ? getNextRun(s.cron) : undefined,
+  }));
 }
 
 // 以 { key: cron } 形式导出，供 scheduler.js 直接引用
 const CRON = Object.fromEntries(SCHEDULES.map((s) => [s.key, s.cron]));
 
-module.exports = { SCHEDULES, CRON, getScheduleList, getNextRun, assertValidCron };
+module.exports = { SCHEDULES, CRON, getScheduleList, getNextRun };

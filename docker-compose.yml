@@ -70,14 +70,11 @@ services:
     environment:
       - MONGO_URI=mongodb://wuyan:${MONGO_PASSWORD:-changeme_strong_password}@mongodb:27017/wuyan?authSource=admin&replicaSet=rs0
       - TZ=Asia/Shanghai
-      - SYNC_API_KEY=${SYNC_API_KEY:-}
       # kpl-data-daily 本地路径（只读挂载）
       - KPL_DATA_DIR=/app/kpl-data-daily
       - OPENAI_API_KEY=${AI_API_KEY:-}
       - OPENAI_BASE_URL=${AI_BASE_URL:-https://api.deepseek.com/v1}
       - OPENAI_MODEL=${AI_MODEL:-deepseek-chat}
-      # Uptime Kuma push 心跳: kpl-crawl 每次执行完上报
-      - UPTIME_PUSH_URL=${UPTIME_PUSH_URL:-}
     depends_on:
       mongodb:
         condition: service_healthy

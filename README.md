@@ -10,7 +10,7 @@ KPL 选手无言的粉丝应援小程序后端服务，从腾讯云 CloudBase �
 - **AI**: OpenAI 兼容 API（DeepSeek / 其他），支持运行时热切换配置
 - **鉴权**: JWT + 旧版 Token 双模式兼容
 - **定时任务**: node-cron
-- **数据采集**: 容器内 Python 爬虫（kpl-data-daily），采集后自动 git push 备份
+- **KPL 数据链路**: 采集/git 备份在宿主机 systemd timer（kpl-data-daily 仓），容器只读挂载数据同步 MongoDB
 
 ## 项目结构
 
@@ -51,7 +51,7 @@ cheer-service/
 │   │   │   └── checkin-summary.js  # 打卡摘要计算
 │   │   └── jobs/                   # 定时任务调度
 │   │       ├── scheduler.js        # cron 调度器
-│   │       ├── syncKplCrawl.js     # Python 爬虫采集 + git push 备份
+│   │       ├── syncKplCrawl.js     # KPL 数据同步编排（变更检测 → syncData/syncSchedule）
 │   │       ├── syncData.js         # 本地数据文件 → MongoDB
 │   │       ├── syncSchedule.js     # 本地赛程文件 → MongoDB
 │   │       ├── syncScheduleLive.js # 比赛窗口内实时赛程同步
@@ -68,7 +68,6 @@ cheer-service/
 │   └── kpl-crawl-migration.md
 ├── deploy.sh                       # 一键远程部署脚本
 ├── docker-compose.yml              # MongoDB + API 容器编排
-├── kpl-requirements.txt            # Python 爬虫依赖
 ├── mongod.cfg                      # 本地 MongoDB 配置
 ├── .env.example
 └── package.json
@@ -135,7 +134,7 @@ curl http://localhost:3000/api/health
 只拉取已发布镜像时用 `docker compose up -d`：此时从 CNB 制品库拉取 `CHEER_SERVICE_IMAGE`
 （默认 `docker.cnb.cool/scriptsmay/cheer-service:latest`），需先 `docker login docker.cnb.cool -u cnb`。
 
-Docker 镜像基于 `node:22-alpine`，内置 Python 3 + git，支持容器内直接运行 kpl-data-daily 爬虫。API 服务映射端口 `19091:3000`。
+Docker 镜像基于 `node:22-alpine`（纯 Node，无 Python/git）。API 服务映射端口 `19091:3000`。
 
 ### 远程一键部署
 
@@ -198,52 +197,47 @@ cp .env.deploy.example .env.deploy
 | `/api/admin/ai/config` | GET | JWT | 查看当前 AI 配置（脱敏） |
 | `/api/admin/ai/config` | PUT | JWT | 更新 AI 配置（持久化到文件，立即生效） |
 | `/api/admin/ai/test` | POST | JWT | 测试 AI 连通性 |
-| `/api/admin/sync/status` | GET | JWT | 查询采集状态和选手数据概览 |
-| `/api/admin/sync/crawl` | POST | JWT | 手动触发 KPL 数据采集 |
-| `/api/admin/sync/overview` | POST | API Key | 接收赛季概览数据（kpl-data-daily 推送） |
-| `/api/admin/sync/schedule` | POST | API Key | 接收赛程数据（kpl-data-daily 推送） |
+| `/api/admin/sync/status` | GET | JWT | 查询同步状态和选手数据概览 |
+| `/api/admin/sync/crawl` | POST | JWT | 手动触发 KPL 数据同步（变更检测+入库） |
+| `/api/admin/scheduler/config` | GET | JWT | 查看周报开关与定时任务列表 |
+| `/api/admin/scheduler/config` | PUT | JWT | 更新周报开关（采集节奏归宿主机 timer，不在后台调整） |
 
 鉴权方式：
 - **JWT**: `Authorization: Bearer <token>`
 - **Token**: `?token=<AUTH_TOKEN>`（query string，兼容旧版小程序）
-- **API Key**: `X-Sync-Key: <SYNC_API_KEY>`（header，数据同步专用）
 
 ## 定时任务
 
 | Cron 表达式 | 任务 | 说明 |
 |-------------|------|------|
-| `0 3,9,15,21 * * *` | syncKplCrawl | Python 爬虫采集（main.py + fetch-schedule.py），6 小时一次。采集前 git pull 同步代码，采集后检测数据变更，有变更才触发 syncData + syncSchedule 入库，最后 git push 备份 |
+| `0 9 * * *` | kpl_crawl (syncKplCrawl) | 读取宿主机 timer 采集落盘的数据，检测变更后触发 syncData + syncSchedule 入库（采集与 git 备份在宿主机 systemd timer：每日 03:00 全量 / 每 6 小时赛程） |
 | `*/10 * * * *` | syncScheduleLive | 实时赛程同步，仅比赛窗口内激活（调用 KPL 官方 API） |
 | `0 5 * * 1` | weeklyStory | 每周一 05:00，AI 生成周故事卡（基于周环比快照） |
 | `20 3 * * *` | cleanupAiReports | 每日 03:20，清理过期 AI 报告（保留 under_review 状态） |
 
-> `CRAWL_ENABLED=false` 可暂停所有调用第三方 API 的采集任务（syncKplCrawl、syncScheduleLive），不影响读本地文件的 syncData/syncSchedule。
+> `CRAWL_ENABLED=false` 暂停 KPL 数据链路（kpl_crawl 同步任务、syncScheduleLive 实时赛程），周报与清理任务不受影响。
+> cron 均为容器内固定值；采集/赛程节奏在 kpl-data-daily 仓库 `deploy/systemd/` 的 timer 上调整。
 
 ## 数据采集架构
 
 ```
-kpl-data-daily (Python 爬虫)
+kpl-data-daily（宿主机 /root/kpl-data-daily，systemd timer）
     │
-    ├── main.py              # 选手数据采集 + AI 洞察生成
-    ├── scripts/fetch-schedule.py  # 赛程采集
+    ├── 03:00 每日    main.py               # 选手数据采集 + AI 洞察生成
+    ├── 00/6 每 6h    fetch-schedule.py     # 赛程采集
+    └── 采集后        git-backup.sh         # 数据 git commit & push 备份
     │
-    ▼ 容器内本地执行 (syncKplCrawl)
+    ▼ 只读挂载 /root/kpl-data-daily → /app/kpl-data-daily
     │
-    ├── git pull rebase      # 采集前同步最新爬虫代码
-    ├── python main.py       # 数据采集
-    ├── python fetch-schedule.py
-    ├── git diff 检测变更     # 排除时间戳和 AI 生成文件的误判
-    ├── git push (SSH)       # 采集后自动备份到 GitHub
+    ▼ 容器内 kpl_crawl 任务（每天 09:00，syncKplCrawl 编排）
     │
-    ▼ 有数据变更时触发
-    │
-    ├── syncData             # 读取本地 JSON → MongoDB season_summaries
-    └── syncSchedule         # 读取本地 JSON → MongoDB match_schedules
+    ├── mtime 检测变更（对比 overview/schedule 文件与 /app/data/.kpl_last_sync）
+    ├── syncData       # 读取本地 JSON → MongoDB season_summaries
+    └── syncSchedule   # 读取本地 JSON → MongoDB match_schedules
 ```
 
-- 爬虫代码挂载在容器内 `/app/kpl-data-daily`，通过 `deploy.sh` 同步
-- git push 默认走 SSH（挂载宿主机 deploy key），可回退 HTTPS + token 模式
-- 支持采集前 `git fetch + rebase` 对齐远程，采集后 push 带重试（国内网络抖动）
+- 爬虫代码与 unit 文件版本化在 kpl-data-daily 仓库 `deploy/`，通过 `deploy.sh` 或 `git pull` 同步到宿主机
+- 容器内无爬虫、无 git；心跳上报由宿主机 `scripts/run-crawl.sh` 完成（UPTIME_PUSH_URL 配在宿主机 .env）
 
 ## 管理后台
 
@@ -251,7 +245,7 @@ kpl-data-daily (Python 爬虫)
 
 - **AI 配置管理**：查看/修改 AI Base URL、API Key、Model，修改后立即生效（无需重启容器）
 - **AI 连通性测试**：发送测试请求验证 AI 服务可用性
-- **数据采集控制**：查看采集状态（最近同步时间/状态/选手概览），手动触发采集
+- **数据同步控制**：查看同步状态（最近同步时间/状态/选手概览），手动触发同步；周报任务开关（采集节奏由宿主机 timer 管理，不在后台调整）
 - 配置优先级：`/app/data/ai-config.json`（管理页面修改）> 环境变量（docker-compose 默认值）
 
 ## 测试
@@ -285,14 +279,9 @@ npm test
 | `ALLOW_LOCALHOST` | 是否允许 localhost CORS（开发模式） |
 | `BLOCKED_TERMS` | 内容安全屏蔽词（逗号分隔） |
 | `IP_HASH_SALT` | IP 哈希盐值（限流用） |
-| `SYNC_API_KEY` | 数据同步 API Key（push 模式鉴权） |
-| `KPL_DATA_DIR` | kpl-data-daily 本地数据目录（容器内路径） |
-| `CRAWL_ENABLED` | 第三方采集开关（`false` 暂停） |
-| `GITHUB_REPO` | kpl-data-daily GitHub 仓库（采集后 git push 备份） |
-| `GITHUB_TOKEN` | GitHub PAT（仅 HTTPS 模式需要，SSH 模式忽略） |
-| `GITHUB_PUSH_SSH` | git push 认证方式（默认 `true` SSH） |
-| `GIT_USER_NAME` | git commit 作者名 |
-| `GIT_USER_EMAIL` | git commit 邮箱 |
+| `KPL_DATA_DIR` | kpl-data-daily 本地数据目录（容器内路径，只读挂载） |
+| `CRAWL_ENABLED` | KPL 数据链路开关（`false` 暂停同步与实时赛程任务） |
+| `KPL_SYNC_STATE_FILE` | 同步状态戳路径（默认 `/app/data/.kpl_last_sync`，须在容器可写卷内） |
 | `AI_USER_DAILY_LIMIT` | AI 应援用户日限额（默认 10） |
 | `AI_IP_DAILY_LIMIT` | AI 应援 IP 日限额（默认 30） |
 | `AI_GLOBAL_DAILY_LIMIT` | AI 应援全局日限额（默认 500） |

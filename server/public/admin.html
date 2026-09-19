@@ -20,7 +20,7 @@
       对比度满足 AA；respect prefers-reduced-motion；桌面 / 平板 / 手机三档。
     · Differentiation：新增「总览」仪表首屏 + 分区导航；
       记忆点 = 打开就知道一切是否正常，操作永不滚三屏。
-    交互改动：7 张平铺卡片 → 4 个分区（总览 / AI 服务 / 应援文案 / 数据采集），
+    交互改动：7 张平铺卡片 → 4 个分区（总览 / AI 服务 / 应援文案 / 数据同步），
     事件表单默认收起，快捷保存走轻提示，删除走确认弹窗，加载用骨架屏。
     演示模式（v1.1.0 已移除）：正式接入后端，所有数据来自 /api/admin/* 真实接口；
     登录走 /api/auth/login，Token 存 localStorage，401 自动回登录页。
@@ -80,8 +80,8 @@
         </a>
         <a class="nav-item" href="#/sync" data-route="sync">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
-          数据采集
-          <span id="navSyncDot" class="nav-dot" hidden aria-label="存在采集错误"></span>
+          数据同步
+          <span id="navSyncDot" class="nav-dot" hidden aria-label="存在同步错误"></span>
         </a>
       </nav>
       <div class="side-foot">
@@ -114,7 +114,7 @@
         <a class="nav-item" href="#/overview" data-route="overview">总览</a>
         <a class="nav-item" href="#/ai" data-route="ai">AI 服务</a>
         <a class="nav-item" href="#/cheer" data-route="cheer">应援文案</a>
-        <a class="nav-item" href="#/sync" data-route="sync">数据采集</a>
+        <a class="nav-item" href="#/sync" data-route="sync">数据同步</a>
       </nav>
     </div>
 
@@ -147,14 +147,14 @@
           <article class="stat-card">
             <div class="stat-head">
               <span class="stat-ico ico-primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2.5-6.5 4.5 13 2.5-6.5H21"/></svg></span>
-              <span class="stat-label">数据采集</span>
+              <span class="stat-label">数据同步</span>
             </div>
             <div class="stat-lines">
               <div class="stat-line"><span>单人数据</span><span id="ovSyncDaily">-</span></div>
               <div class="stat-line"><span>赛程数据</span><span id="ovSyncSchedule">-</span></div>
               <div class="stat-line"><span>最近更新</span><span id="ovSyncTime" class="mono">-</span></div>
             </div>
-            <a class="stat-link" href="#/sync">状态与手动采集
+            <a class="stat-link" href="#/sync">状态与手动同步
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 5.5l6.5 6.5-6.5 6.5"/></svg>
             </a>
           </article>
@@ -164,10 +164,10 @@
               <span class="stat-label">定时任务</span>
             </div>
             <div class="stat-lines">
-              <div class="stat-line"><span>采集任务</span><span id="ovTaskNext" class="mono">-</span></div>
+              <div class="stat-line"><span>同步任务</span><span id="ovTaskNext" class="mono">-</span></div>
               <div class="stat-line"><span>周报任务</span><span id="ovTaskWeekly">-</span></div>
             </div>
-            <a class="stat-link" href="#/sync">频率与周报
+            <a class="stat-link" href="#/sync">同步与周报
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 5.5l6.5 6.5-6.5 6.5"/></svg>
             </a>
           </article>
@@ -426,19 +426,19 @@
       <section class="view" id="view-sync" hidden aria-labelledby="syncTitle">
         <header class="view-head">
           <div>
-            <h2 id="syncTitle">数据采集</h2>
-            <p>KPL 数据采集与定时任务；cron 保存后立即重建任务，无需重启容器。</p>
+            <h2 id="syncTitle">数据同步</h2>
+            <p>KPL 数据采集由宿主机 systemd timer 负责，容器只读挂载数据并同步 MongoDB；此处管理同步与周报任务。</p>
           </div>
         </header>
 
         <section class="panel">
-          <div class="panel-head"><h3>采集状态</h3></div>
+          <div class="panel-head"><h3>同步状态</h3></div>
           <p class="panel-desc">手动触发为异步执行，结果见容器日志。</p>
           <div id="syncStatus"><div class="skel skel-line"></div></div>
           <div class="btn-row">
             <button class="btn btn-primary" id="crawlBtn" type="button">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5.5v13l10-6.5-10-6.5z"/></svg>
-              手动采集
+              手动同步
             </button>
             <button class="btn btn-ghost" id="refreshBtn" type="button">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
@@ -449,30 +449,16 @@
         </section>
 
         <section class="panel">
-          <div class="panel-head"><h3>定时采集任务</h3></div>
+          <div class="panel-head"><h3>同步任务</h3></div>
           <div id="scheduleList"><div class="skel skel-line"></div></div>
         </section>
 
         <section class="panel">
           <div class="panel-head">
-            <h3>采集与周报配置</h3>
+            <h3>周报任务配置</h3>
             <span id="schedulerSourceBadge" class="badge badge-env"></span>
           </div>
-          <div class="form-grid2">
-            <div class="form-group">
-              <label for="crawlPreset">KPL 采集频率</label>
-              <select id="crawlPreset">
-                <option value="0 9 * * *">每天 1 次（09:00）</option>
-                <option value="0 9,21 * * *">每天 2 次（09:00 / 21:00）</option>
-                <option value="0 3,9,15,21 * * *">每 6 小时 1 次（03/09/15/21）</option>
-                <option value="custom">自定义 cron</option>
-              </select>
-            </div>
-            <div class="form-group" id="crawlCustomGroup" hidden>
-              <label for="crawlCustomCron">自定义 cron（5 段：分 时 日 月 周）</label>
-              <input id="crawlCustomCron" class="mono" placeholder="例如：0 9 * * *" />
-            </div>
-          </div>
+          <p class="panel-desc">采集/赛程节奏由宿主机 systemd timer 管理（每日 03:00 全量 / 每 6 小时赛程），不在后台调整。</p>
           <label class="check-row">
             <input id="weeklyStoryEnabled" type="checkbox" />
             <span class="check-txt">启用周报任务<em>每周一 05:00 生成；缺赛期缺少周环比数据，建议关闭</em></span>

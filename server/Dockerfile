@@ -3,23 +3,16 @@ FROM node:22-alpine
 # 国内镜像源加速（腾讯云机器走腾讯镜像，通用兼容阿里镜像备选）
 RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.cloud.tencent.com|g' /etc/apk/repositories && \
     apk upgrade --no-cache && \
-    apk add --no-cache python3 py3-pip tzdata
+    apk add --no-cache tzdata
 
-# kpl-data-daily 数据采集已迁移到宿主机 systemd timer
-# 容器内不再需要 git/ssh 功能，移除相关依赖
-# 数据通过 docker-compose.yml 卷挂载读取
+# kpl-data-daily 数据采集在宿主机 systemd timer 执行（业务分离），容器只读挂载数据
+# 同步 MongoDB，无 python/git/ssh 依赖
 
 WORKDIR /app
 
 COPY package.json ./
 RUN npm config set registry https://mirrors.cloud.tencent.com/npm/ && \
     npm install --production
-
-# 新增: 安装 kpl-data-daily Python 依赖（纯 Python，无需 C 编译器）
-COPY kpl-requirements.txt ./
-RUN pip3 install --break-system-packages \
-    -i https://mirrors.cloud.tencent.com/pypi/simple/ \
-    -r kpl-requirements.txt
 
 COPY server/src/ ./server/src/
 COPY server/public/ ./server/public/

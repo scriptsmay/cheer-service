@@ -3,20 +3,18 @@
 /**
  * 定时任务调度器 — node-cron 替代 TCB 定时触发器
  *
- * 任务句柄保存在 Map 中，支持运行时热重载（rescheduleTask）。
- * 启动时优先读取 app_config.scheduler_settings，DB 有值优先于 schedules.js 默认，
- * 避免容器重启后覆盖线上通过管理页面所做的配置。
+ * 任务句柄保存在 Map 中。cron 表达式统一取自 schedules.js 的固定默认值：
+ * KPL 数据采集已在宿主机 systemd timer 执行（业务分离），容器内任务只负责
+ * 读取挂载数据同步 MongoDB 与周报/清理，不再提供后台改频道的入口。
  */
 
 const cron = require('node-cron');
 const config = require('../config/env');
 const { syncKplCrawl } = require('./syncKplCrawl');
-const { syncData } = require('./syncData');
-const { syncSchedule } = require('./syncSchedule');
 const { syncScheduleLive } = require('./syncScheduleLive');
 const { weeklyStory } = require('./weeklyStory');
 const { cleanupAiReports } = require('./cleanupAiReports');
-const { CRON, assertValidCron } = require('./schedules');
+const { CRON } = require('./schedules');
 const { getSchedulerSettings } = require('../services/settings-store');
 
 // 注：jobs/syncLive.js 未在此导入、也不注册进调度器——它依赖部署中未提供的
@@ -47,29 +45,15 @@ function withOverlapGuard(key, fn) {
 const handlers = {
   kpl_crawl: withOverlapGuard('kpl_crawl', async () => {
     if (!config.crawlEnabled) {
-      console.log('[scheduler] syncKplCrawl skipped (CRAWL_ENABLED=false)');
+      console.log('[scheduler] kpl_crawl skipped (CRAWL_ENABLED=false)');
       return;
     }
-    console.log('[scheduler] Running syncKplCrawl at', new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }));
+    console.log('[scheduler] Running kpl_crawl (file → MongoDB sync) at', new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }));
     try {
       const results = await syncKplCrawl();
-      if (results.hasChanges) {
-        console.log('[scheduler] Data changed, running syncData + syncSchedule');
-        try {
-          await syncData();
-        } catch (e) {
-          console.error('[scheduler] syncData error:', e.message);
-        }
-        try {
-          await syncSchedule();
-        } catch (e) {
-          console.error('[scheduler] syncSchedule error:', e.message);
-        }
-      } else {
-        console.log('[scheduler] No data changes, skipping syncData + syncSchedule');
-      }
+      console.log('[scheduler] kpl_crawl result:', JSON.stringify(results));
     } catch (e) {
-      console.error('[scheduler] syncKplCrawl error:', e.message);
+      console.error('[scheduler] kpl_crawl error:', e.message);
     }
   }),
 
@@ -134,44 +118,8 @@ function register(key, cronExpr) {
   tasks.set(key, cron.schedule(cronExpr, handler));
 }
 
-/**
- * 运行时重建任务（供 admin 接口调用）。
- * 校验 cron 合法性后销毁旧任务、按新表达式重建。
- * @returns {string} 新表达式（合法时）
- */
-function rescheduleTask(key, cronExpr) {
-  if (!handlers[key]) {
-    throw new Error(`unknown task: ${key}`);
-  }
-  assertValidCron(cronExpr); // 非法则抛错，调用方转 400
-  register(key, cronExpr);
-  console.log(`[scheduler] rescheduled ${key} → ${cronExpr}`);
-  return cronExpr;
-}
-
 async function startScheduler() {
-  // DB 配置优先，读取失败降级到默认值（不阻塞启动）
-  let kplCrawlCron = CRON.kpl_crawl;
-  try {
-    const settings = await getSchedulerSettings();
-    if (settings.kpl_crawl_cron) {
-      kplCrawlCron = settings.kpl_crawl_cron;
-    }
-    console.log(`[scheduler] loaded settings (source=${settings.source}), kpl_crawl cron=${kplCrawlCron}`);
-  } catch (e) {
-    console.warn('[scheduler] settings read failed, using defaults:', e.message);
-  }
-
-  // 若 DB 中的 cron 曾在旧宽松校验下写入了 node-cron 不支持的表达式，
-  // 启动时会抛错导致 process.exit(1)。这里做一次防御性校验，非法就回退默认。
-  try {
-    assertValidCron(kplCrawlCron);
-  } catch (e) {
-    console.error(`[scheduler] invalid stored kpl_crawl_cron "${kplCrawlCron}": ${e.message} — using default`);
-    kplCrawlCron = CRON.kpl_crawl;
-  }
-
-  register('kpl_crawl', kplCrawlCron);
+  register('kpl_crawl', CRON.kpl_crawl);
   register('kpl_live', CRON.kpl_live);
   register('weekly_story', CRON.weekly_story);
   register('cleanup_ai', CRON.cleanup_ai);
@@ -179,4 +127,4 @@ async function startScheduler() {
   console.log('[scheduler] All cron jobs registered');
 }
 
-module.exports = { startScheduler, rescheduleTask };
+module.exports = { startScheduler };

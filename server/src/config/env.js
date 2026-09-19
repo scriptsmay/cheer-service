@@ -54,14 +54,11 @@ const config = {
   // kpl-data-daily 本地数据目录（容器内挂载路径）
   kplDataDir: process.env.KPL_DATA_DIR || '/app/kpl-data-daily',
 
-  // 第三方采集开关（CRAWL_ENABLED=false 时暂停所有调用第三方 API 的采集任务）
-  // 用于第三方接口不可用时暂停采集，避免无效请求和错误日志
-  // 受影响: syncKplCrawl(Python 采集)、syncScheduleLive(实时赛程)
-  // 不受影响: syncData/syncSchedule(读本地文件，不调第三方)
+  // KPL 数据链路总开关（CRAWL_ENABLED=false 时暂停 kpl 同步与实时赛程任务）
+  // 用于维护期整体暂停 KPL 数据链路
+  // 受影响: kpl_crawl(文件→MongoDB 同步)、syncScheduleLive(实时赛程，调 KPL 官方 API)
   crawlEnabled: process.env.CRAWL_ENABLED !== 'false',
 
-  // 数据同步 API Key（push 模式，kpl-data-daily GitHub Actions 推送用）
-  syncApiKey: process.env.SYNC_API_KEY || '',
 
   // AI 文案数据模式：season | career | emotion（DB 优先，此为兜底默认）
   cheerDataMode: (process.env.CHEER_DATA_MODE || 'season').toLowerCase(),

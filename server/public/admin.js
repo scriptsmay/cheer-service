@@ -628,7 +628,7 @@ async function deleteEvent(id) {
 }
 
 /* ════════════════════════════════════════════════
- * 8. 数据采集与定时任务
+ * 8. 数据同步与周报任务
  * ════════════════════════════════════════════════ */
 async function refreshSyncStatus() {
   const el = document.getElementById('syncStatus');
@@ -706,10 +706,10 @@ async function triggerCrawl() {
   const btn = document.getElementById('crawlBtn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>提交中…';
-  el.innerHTML = '<div class="result info">采集任务已提交，异步执行中，结果见容器日志…</div>';
+  el.innerHTML = '<div class="result info">同步任务已提交，异步执行中，结果见容器日志…</div>';
   try {
     const r = await api('POST', '/api/admin/sync/crawl');
-    if (!r) { btn.disabled = false; btn.innerHTML = '手动采集'; return; }
+    if (!r) { btn.disabled = false; btn.innerHTML = '手动同步'; return; }
     const d = await r.json();
     el.innerHTML = d.ok
       ? '<div class="result success">' + escapeHtml(d.message) + '</div>'
@@ -718,14 +718,9 @@ async function triggerCrawl() {
     el.innerHTML = '<div class="result error">网络错误：' + escapeHtml(e.message) + '</div>';
   }
   btn.disabled = false;
-  btn.innerHTML = '手动采集';
+  btn.innerHTML = '手动同步';
 }
 
-const CRAWL_PRESETS = ['0 9 * * *', '0 9,21 * * *', '0 3,9,15,21 * * *'];
-function onCrawlPresetChange() {
-  const val = document.getElementById('crawlPreset').value;
-  document.getElementById('crawlCustomGroup').hidden = (val !== 'custom');
-}
 async function refreshSchedulerConfig() {
   try {
     const r = await api('GET', '/api/admin/scheduler/config');
@@ -736,18 +731,8 @@ async function refreshSchedulerConfig() {
     badge.textContent = d.source === 'db' ? '已自定义' : '默认值';
     badge.className = 'badge ' + (d.source === 'db' ? 'badge-file' : 'badge-env');
     document.getElementById('weeklyStoryEnabled').checked = !!d.weekly_story_enabled;
-    const sel = document.getElementById('crawlPreset');
-    const crawlGroup = document.getElementById('crawlCustomGroup');
-    if (CRAWL_PRESETS.includes(d.kpl_crawl_cron)) {
-      sel.value = d.kpl_crawl_cron;
-      crawlGroup.hidden = true;
-    } else {
-      sel.value = 'custom';
-      crawlGroup.hidden = false;
-      document.getElementById('crawlCustomCron').value = d.kpl_crawl_cron;
-    }
     const crawl = Array.isArray(d.schedules) ? d.schedules.find((s) => s.key === 'kpl_crawl') : null;
-    const nextTxt = crawl && crawl.next_run ? '采集任务下次执行：' + formatTimeCST(crawl.next_run) : '';
+    const nextTxt = crawl && crawl.next_run ? '同步任务下次执行：' + formatTimeCST(crawl.next_run) : '';
     document.getElementById('schedulerNextRun').textContent = nextTxt;
     document.getElementById('ovTaskNext').textContent = crawl && crawl.next_run ? formatTimeCST(crawl.next_run) : '-';
     const wk = document.getElementById('ovTaskWeekly');
@@ -757,11 +742,6 @@ async function refreshSchedulerConfig() {
 }
 async function saveSchedulerConfig() {
   const body = { weekly_story_enabled: document.getElementById('weeklyStoryEnabled').checked };
-  const preset = document.getElementById('crawlPreset').value;
-  body.kpl_crawl_cron = preset === 'custom'
-    ? document.getElementById('crawlCustomCron').value.trim()
-    : preset;
-  if (!body.kpl_crawl_cron) { toast('cron 不能为空', 'error'); return; }
   const btn = document.getElementById('saveSchedulerBtn');
   btn.disabled = true;
   const r = await api('PUT', '/api/admin/scheduler/config', body);
@@ -769,11 +749,8 @@ async function saveSchedulerConfig() {
   if (!r) return;
   const d = await r.json();
   if (d.ok) {
-    toast(escapeHtml(d.message || '定时任务配置已保存'));
-    document.getElementById('schedulerNextRun').textContent =
-      d.next_run ? '采集任务下次执行：' + formatTimeCST(d.next_run) : '';
-    document.getElementById('ovTaskNext').textContent = d.next_run ? formatTimeCST(d.next_run) : '-';
-    refreshSyncStatus();
+    toast(escapeHtml(d.message || '周报配置已保存'));
+    refreshSyncSection();
   } else {
     toast(escapeHtml(d.error || '保存失败'), 'error');
   }
@@ -846,7 +823,6 @@ function bindEvents() {
 
   document.getElementById('crawlBtn').addEventListener('click', triggerCrawl);
   document.getElementById('refreshBtn').addEventListener('click', refreshSyncStatus);
-  document.getElementById('crawlPreset').addEventListener('change', onCrawlPresetChange);
   document.getElementById('saveSchedulerBtn').addEventListener('click', saveSchedulerConfig);
   document.getElementById('reloadSchedulerBtn').addEventListener('click', refreshSchedulerConfig);
 

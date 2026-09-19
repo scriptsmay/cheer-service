@@ -5,7 +5,7 @@
  *
  * 统一封装两类线上可改配置，供「文案生成」与「调度器」共享读取：
  *   - app_config/cheer_settings    { data_mode, date_context_enabled, humanize_enabled, event_context_enabled }
- *   - app_config/scheduler_settings { weekly_story_enabled, kpl_crawl_cron }
+ *   - app_config/scheduler_settings { weekly_story_enabled }
  *   - cheer_events（集合，每事件一个 doc，_id 为幂等键）
  *
  * 优先级：MongoDB（管理页面修改） > env / schedules.js 默认值。
@@ -14,7 +14,6 @@
 
 const { collection } = require('../db/mongo');
 const config = require('../config/env');
-const { CRON } = require('../jobs/schedules');
 const { resolveEventPhase } = require('../lib/date-context');
 const { DEFAULT_PROMPTS, validateTemplate } = require('../lib/prompt-template');
 
@@ -269,7 +268,6 @@ async function getSchedulerSettings() {
 
   const defaults = {
     weekly_story_enabled: config.weeklyStoryEnabled,
-    kpl_crawl_cron: CRON.kpl_crawl,
     source: 'env',
   };
   try {
@@ -280,8 +278,6 @@ async function getSchedulerSettings() {
       ? {
         weekly_story_enabled:
             typeof doc.weekly_story_enabled === 'boolean' ? doc.weekly_story_enabled : defaults.weekly_story_enabled,
-        kpl_crawl_cron:
-            typeof doc.kpl_crawl_cron === 'string' && doc.kpl_crawl_cron ? doc.kpl_crawl_cron : defaults.kpl_crawl_cron,
         source: 'db',
       }
       : defaults;
@@ -303,8 +299,6 @@ async function setSchedulerSettings(patch) {
   const next = Object.assign({}, existing, {
     weekly_story_enabled:
       typeof patch.weekly_story_enabled === 'boolean' ? patch.weekly_story_enabled : current.weekly_story_enabled,
-    kpl_crawl_cron:
-      typeof patch.kpl_crawl_cron === 'string' && patch.kpl_crawl_cron ? patch.kpl_crawl_cron : current.kpl_crawl_cron,
     updated_at: new Date().toISOString(),
   });
   delete next._id; // _id 由 doc().set() 自行写入，避免重复

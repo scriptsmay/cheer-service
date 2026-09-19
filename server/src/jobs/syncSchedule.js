@@ -1,8 +1,8 @@
 'use strict';
 
 /**
- * syncSchedule job
- * 每日 06:00，从本地 kpl-data-daily 数据目录全量同步赛程
+ * syncSchedule job — 从本地 kpl-data-daily 数据目录全量同步赛程
+ * 由 syncKplCrawl 编排调用（每日 09:00 定时窗口 / 后台手动同步），不独立调度
  */
 
 const fs = require('fs');

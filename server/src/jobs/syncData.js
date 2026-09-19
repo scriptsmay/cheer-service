@@ -1,8 +1,8 @@
 'use strict';
 
 /**
- * syncData job
- * 每日 04:00，从本地 kpl-data-daily 数据目录读取赛季概览写入 MongoDB
+ * syncData job — 从本地 kpl-data-daily 数据目录读取赛季概览写入 MongoDB
+ * 由 syncKplCrawl 编排调用（每日 09:00 定时窗口 / 后台手动同步），不独立调度
  */
 
 const fs = require('fs');
