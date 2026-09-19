@@ -3,11 +3,11 @@ FROM node:22-alpine
 # 国内镜像源加速（腾讯云机器走腾讯镜像，通用兼容阿里镜像备选）
 RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.cloud.tencent.com|g' /etc/apk/repositories && \
     apk upgrade --no-cache && \
-    apk add --no-cache python3 py3-pip git openssh-client tzdata
+    apk add --no-cache python3 py3-pip tzdata
 
-# 运行时已通过 GIT_SSH_COMMAND 配置 StrictHostKeyChecking=accept-new
-# 首次 git push 时会自动接受 github.com 的 host key，无需构建时预置
-# 原 ssh-keyscan github.com 会访问 22 端口，CNB 构建环境禁止
+# kpl-data-daily 数据采集已迁移到宿主机 systemd timer
+# 容器内不再需要 git/ssh 功能，移除相关依赖
+# 数据通过 docker-compose.yml 卷挂载读取
 
 WORKDIR /app
 
