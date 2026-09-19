@@ -1,6 +1,6 @@
 # cheer-service CNB 流水线配置
 # main push: 仅构建测试，不部署
-# tag_push: 构建测试 + 部署（正式发布）
+# tag_push: 构建测试 + 部署（正式发布，顺序执行）
 
 main:
   push:
@@ -33,20 +33,16 @@ main:
             IMAGE_TAG="${CNB_DOCKER_REGISTRY}/scriptsmay/cheer-service:${CNB_COMMIT_SHORT}"
             docker build -t ${IMAGE_TAG} -f server/Dockerfile .
             docker push ${IMAGE_TAG}
-            # 推送后立即验证 tag 可被拉取：把「镜像不存在」暴露在 build 阶段，
-            # 而不是等到 deploy 阶段才由 docker pull 报 "not found"（届时已难判断是构建没推成功还是竞态）
             docker manifest inspect ${IMAGE_TAG} >/dev/null \
               || { echo "镜像推送后无法在制品库检索到: ${IMAGE_TAG}"; exit 1; }
             echo "镜像已就绪: ${IMAGE_TAG}"
-          # exports 的 key 是「导出到后续 Stage / Pipeline 的变量名」。
-          # 需要跨 Pipeline 使用的导出名必须带 CNB_ 前缀（否则只在当前 Pipeline 内可见）。
           exports:
             IMAGE_TAG: CNB_IMAGE_TAG
 
 # 打标签时部署（正式发布）
 $: 
   tag_push:
-    - name: ci-and-build
+    - name: build-and-deploy
       runner:
         cpus: 4
       docker:
@@ -57,6 +53,10 @@ $:
         NODE_ENV: test
       imports:
         - https://cnb.cool/scriptsmay/deploy-secrets/-/blob/main/cheer-service.yml
+      lock:
+        key: cheer-service-deploy
+        wait: true
+        cancel-in-wait: true
       stages:
         # 1. 安装依赖
         - name: install
@@ -79,21 +79,7 @@ $:
               || { echo "镜像推送后无法在制品库检索到: ${IMAGE_TAG}"; exit 1; }
             echo "镜像已就绪: ${IMAGE_TAG}"
 
-    - name: deploy
-      runner:
-        cpus: 2
-      docker:
-        image: alpine:latest
-      services:
-        - docker
-      imports:
-        - https://cnb.cool/scriptsmay/deploy-secrets/-/blob/main/cheer-service.yml
-      lock:
-        key: cheer-service-deploy
-        wait: true
-        cancel-in-wait: true
-      stages:
-        # 部署到远程服务器
+        # 4. 部署到远程服务器
         - name: deploy
           script: |
             apk add --no-cache openssh-client
@@ -119,9 +105,7 @@ $:
               echo 'docker-compose.yml 已同步到远端'
             "
 
-            # ── 部署 ──
-            # tag_push 事件下 CNB_BRANCH = tag 名（如 v1.0.0）
-            # 镜像 tag 与版本 tag 一一锚定，可回滚、可追溯
+            # 部署
             REMOTE_PULL_IMAGE="${CNB_DOCKER_REGISTRY}/scriptsmay/cheer-service:${CNB_BRANCH}"
             echo "部署镜像: ${REMOTE_PULL_IMAGE}"
             printf '%s' "${REGISTRY_DEPLOY_TOKEN}" | ssh -o BatchMode=yes ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} "
@@ -133,7 +117,7 @@ $:
               docker image prune -f
             "
 
-        # 健康检查
+        # 5. 健康检查
         - name: health-check
           script: |
             apk add --no-cache curl
