@@ -57,15 +57,35 @@ main:
             # 先校验私钥可用，避免 ssh 报 "error in libcrypto" 这类难懂的错
             ssh-keygen -y -f ~/.ssh/id_rsa >/dev/null || { echo "DEPLOY_SSH_KEY_B64 无法解码为可用私钥，请检查 deploy-secrets"; exit 1; }
             ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+            # ── 前置自检：远端部署目录必须可写，且已有 .env（.env 是运行时状态，由人工/首次部署维护）──
+            printf '%s' "${REGISTRY_DEPLOY_TOKEN}" | ssh -o BatchMode=yes ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} \
+              "set -e; test -d ${DEPLOY_DIR} || { echo '远端部署目录不存在: ${DEPLOY_DIR}'; exit 1; }; test -w ${DEPLOY_DIR} || { echo '远端部署目录不可写: ${DEPLOY_DIR}'; exit 1; }; test -f ${DEPLOY_DIR}/.env || { echo '远端缺少 ${DEPLOY_DIR}/.env，请先按 .env.example 配置'; exit 1; }; echo 远端部署目录自检通过"
+
+            # ── B 方案：仓库是 docker-compose.yml 的唯一事实来源，部署前同步到远端 ──
+            # CI 工作区已检出本仓库，直接 scp 过去即可；只覆盖 docker-compose.yml，
+            # 不触碰远端 .env / logs / bind mount 数据 / 其它文件。
+            # 用 .new + mv 原子替换：ssh 中断也不会留下半截的 compose 文件。
+            COMPOSE_REMOTE_TMP="${DEPLOY_DIR}/docker-compose.yml.new"
+            scp -q -P ${DEPLOY_PORT} -o BatchMode=yes docker-compose.yml \
+              ${DEPLOY_USER}@${DEPLOY_HOST}:${COMPOSE_REMOTE_TMP}
+            printf '%s' "${REGISTRY_DEPLOY_TOKEN}" | ssh -o BatchMode=yes ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} "
+              set -e
+              cd ${DEPLOY_DIR}
+              # 确认同步成功：应含 CHEER_SERVICE_IMAGE 锚点，说明拿到的是新版本
+              grep -q 'CHEER_SERVICE_IMAGE' docker-compose.yml.new || { echo '同步的 docker-compose.yml 不含 CHEER_SERVICE_IMAGE，疑似旧文件'; rm -f docker-compose.yml.new; exit 1; }
+              # 语法自检，坏文件不覆盖线上可用的那份
+              docker compose -f docker-compose.yml.new config -q || { echo 'docker-compose.yml 语法校验失败，已放弃同步'; rm -f docker-compose.yml.new; exit 1; }
+              mv docker-compose.yml.new docker-compose.yml
+              echo 'docker-compose.yml 已同步到远端'
+            "
+
+            # ── 部署 ──
             # 部署目标镜像与构建阶段保持一致，避免 compose 里的 image 字段指向 docker.io 上不存在的镜像
             REMOTE_PULL_IMAGE="${CNB_DOCKER_REGISTRY}/scriptsmay/cheer-service:${CNB_COMMIT_SHORT}"
             echo "部署镜像: ${REMOTE_PULL_IMAGE}"
-            # 0. 校验远端部署目录确实是本仓库最新代码（防止过期副本导致 pull 到 docker.io 旧镜像）
-            printf '%s' "${REGISTRY_DEPLOY_TOKEN}" | ssh -o BatchMode=yes ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} \
-              "cd ${DEPLOY_DIR} && [ -f docker-compose.yml ] || { echo '远端缺少 docker-compose.yml: ${DEPLOY_DIR}'; exit 1; } && grep -q 'CHEER_SERVICE_IMAGE' docker-compose.yml || { echo '远端 docker-compose.yml 已过期(无 CHEER_SERVICE_IMAGE)，请重新执行 deploy.sh 同步代码'; exit 1; } && [ -f .env ] || { echo '远端缺少 .env，无法 docker compose pull'; exit 1; }"
             # 1. 部署令牌经 ssh stdin 传给远端 docker login，避免出现在命令行/进程列表
-            #    镜像必须先 pull 到本地再 up：只 pull 不导出 CHEER_SERVICE_IMAGE 时 compose 仍读远端 .env，会拉错镜像
-            # 2. ${CI_COMMIT_SHORT} 等被 shell 双引号包住展开，使用反斜杠转义
+            # 2. 必须先 pull 再 up：只 pull 不导出 CHEER_SERVICE_IMAGE 时 compose 仍读远端 .env，会拉错镜像
             printf '%s' "${REGISTRY_DEPLOY_TOKEN}" | ssh -o BatchMode=yes ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} "
               cd ${DEPLOY_DIR} &&
               docker login docker.cnb.cool -u cnb --password-stdin &&
@@ -100,5 +120,5 @@ main:
             chmod 600 ~/.ssh/id_rsa
             ssh-keygen -y -f ~/.ssh/id_rsa >/dev/null || { echo "DEPLOY_SSH_KEY_B64 无法解码为可用私钥，跳过回滚"; exit 1; }
             ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts 2>/dev/null || true
-            # 回滚：优先用远端 .env 里配置的镜像（若为远程 build 场景，镜像已存在于本机，不会走网络拉取）
+            # 回滚：用远端 .env 里配置的镜像（CI 路径下远端 compose 已同步为本仓库版本，直接 up 可恢复上一容器）
             ssh -o BatchMode=yes ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} "cd ${DEPLOY_DIR} && docker compose down api && docker compose up -d api"
