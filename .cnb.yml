@@ -41,6 +41,8 @@ main:
 
 # 打标签时部署（正式发布）
 $: 
+  api_trigger_deploy:
+    - name: build-and-deploy
   tag_push:
     - name: build-and-deploy
       runner:
