@@ -15,12 +15,12 @@
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "cron-parser": "^4.9.0",
+    "cron-parser": "^5.10.1",
     "express": "^4.21.0",
     "jsonwebtoken": "^9.0.2",
     "lunar-javascript": "^1.7.7",
     "mongodb": "^6.12.0",
-    "node-cron": "^3.0.3"
+    "node-cron": "^4.6.0"
   },
   "engines": {
     "node": ">=18.0.0"
