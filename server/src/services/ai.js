@@ -72,12 +72,11 @@ async function generateText({ messages, temperature = 0.85, jsonMode = false, fr
  * @param {number} opts.temperature - 温度 (默认 0.85)
  * @param {boolean} opts.jsonMode   - 是否强制 JSON 输出
  * @param {number} [opts.frequency_penalty] - 频率惩罚
- * @param {number} [opts.presence_penalty]  - 存在惩罚
+ * @param {number} [opts.presence_penalty] - 存在惩罚
  * @param {Function} [opts.onChunk] - 收到 chunk 时的回调 (chunk: {type: 'reasoning'|'content'|'complete', data: string, fullText?: string}) => void
- * @param {number} [opts.keepaliveIntervalMs] - 心跳保活间隔 (默认 15000ms)
  * @returns {Promise<{text: string, usage: Object, reasoning: string}>}
  */
-async function generateTextStream({ messages, temperature = 0.85, jsonMode = false, frequency_penalty, presence_penalty, onChunk, keepaliveIntervalMs = 15000 }) {
+async function generateTextStream({ messages, temperature = 0.85, jsonMode = false, frequency_penalty, presence_penalty, onChunk }) {
   const { baseUrl, apiKey, model } = getEffectiveConfig();
 
   const body = {
@@ -94,100 +93,119 @@ async function generateTextStream({ messages, temperature = 0.85, jsonMode = fal
     body.response_format = { type: 'json_object' };
   }
 
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(config.aiTimeoutMs || 180000),
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`AI API error ${response.status}: ${err}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder('utf-8');
-  let buffer = '';
-  let fullText = '';
-  let reasoningText = '';
-  let usage = null;
-  let modelMeta = null;
-
-  // SSE 解析辅助函数
-  function parseSSELine(line) {
-    if (line.startsWith('data: ')) {
-      const data = line.slice(6);
-      if (data === '[DONE]') return { done: true };
-      try {
-        return { parsed: JSON.parse(data) };
-      } catch {
-        return null;
-      }
-    }
-    if (line.startsWith(':keepalive')) {
-      return { keepalive: true };
-    }
-    return null;
-  }
-
-  // 读取流
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || ''; // 保留不完整的行
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-
-      const event = parseSSELine(trimmed);
-      if (!event) continue;
-      if (event.done) break;
-      if (event.keepalive) {
-        if (onChunk) onChunk({ type: 'keepalive' });
-        continue;
-      }
-      if (event.parsed) {
-        const chunk = event.parsed;
-        modelMeta = modelMeta || { model: chunk.model, created: chunk.created };
-        usage = usage || chunk.usage;
-
-        const choice = chunk.choices?.[0];
-        if (!choice) continue;
-
-        const delta = choice.delta || {};
-        const reasoningContent = delta.reasoning_content;
-        const content = delta.content;
-
-        if (reasoningContent) {
-          reasoningText += reasoningContent;
-          if (onChunk) onChunk({ type: 'reasoning', data: reasoningContent, fullText: reasoningText });
-        }
-
-        if (content) {
-          fullText += content;
-          if (onChunk) onChunk({ type: 'content', data: content, fullText });
-        }
-
-        if (choice.finish_reason === 'stop') {
-          usage = chunk.usage;
-        }
-      }
-    }
-  }
-
-  return {
-    text: fullText,
-    reasoning: reasoningText,
-    usage: usage || { total_tokens: 0, prompt_tokens: 0, completion_tokens: 0 },
+  // 空闲超时（非总时长）：每次收到数据就重置计时器，
+  // 思考型模型推理耗时不受 3 分钟墙钟限制，只要数据还在流动就不中断
+  const idleTimeoutMs = config.aiStreamIdleTimeoutMs || 90000;
+  const controller = new AbortController();
+  let idleTimer = null;
+  const armIdleTimer = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      controller.abort(new Error(`AI 流式响应空闲超时：${Math.round(idleTimeoutMs / 1000)}s 未收到数据`));
+    }, idleTimeoutMs);
   };
+  armIdleTimer();
+
+  let response;
+  try {
+    response = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`AI API error ${response.status}: ${err}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let fullText = '';
+    let reasoningText = '';
+    let usage = null;
+    let modelMeta = null;
+
+    // SSE 解析辅助函数
+    function parseSSELine(line) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6);
+        if (data === '[DONE]') return { done: true };
+        try {
+          return { parsed: JSON.parse(data) };
+        } catch {
+          return null;
+        }
+      }
+      if (line.startsWith(':keepalive')) {
+        return { keepalive: true };
+      }
+      return null;
+    }
+
+    // 读取流
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      armIdleTimer(); // 收到数据，重置空闲计时
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // 保留不完整的行
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        const event = parseSSELine(trimmed);
+        if (!event) continue;
+        if (event.done) break;
+        if (event.keepalive) {
+          if (onChunk) onChunk({ type: 'keepalive' });
+          continue;
+        }
+        if (event.parsed) {
+          const chunk = event.parsed;
+          modelMeta = modelMeta || { model: chunk.model, created: chunk.created };
+          usage = usage || chunk.usage;
+
+          const choice = chunk.choices?.[0];
+          if (!choice) continue;
+
+          const delta = choice.delta || {};
+          const reasoningContent = delta.reasoning_content;
+          const content = delta.content;
+
+          if (reasoningContent) {
+            reasoningText += reasoningContent;
+            if (onChunk) onChunk({ type: 'reasoning', data: reasoningContent, fullText: reasoningText });
+          }
+
+          if (content) {
+            fullText += content;
+            if (onChunk) onChunk({ type: 'content', data: content, fullText });
+          }
+
+          if (choice.finish_reason === 'stop') {
+            usage = chunk.usage;
+          }
+        }
+      }
+    }
+
+    return {
+      text: fullText,
+      reasoning: reasoningText,
+      usage: usage || { total_tokens: 0, prompt_tokens: 0, completion_tokens: 0 },
+    };
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer);
+  }
 }
 
 module.exports = { generateText, generateTextStream };

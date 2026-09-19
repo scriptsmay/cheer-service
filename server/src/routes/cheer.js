@@ -340,7 +340,6 @@ router.post('/stream', async (req, res) => {
       // 开始流式生成
       let collectedText = '';
       let collectedReasoning = '';
-      let lastChunkTime = Date.now();
       let lastSentLineCount = 0;
 
       startKeepalive();
@@ -352,10 +351,10 @@ router.post('/stream', async (req, res) => {
         frequency_penalty: promptCfg.frequency_penalty,
         presence_penalty: promptCfg.presence_penalty,
         onChunk: (chunk) => {
-          lastChunkTime = Date.now();
           if (chunk.type === 'reasoning') {
             collectedReasoning += chunk.data;
-            sendEvent('thinking', { text: collectedReasoning });
+            // 只发增量片段，前端自行累计（避免 O(n²) 重复传输）
+            sendEvent('thinking', { text: chunk.data });
           } else if (chunk.type === 'content') {
             collectedText += chunk.data;
             // 只发送新增的行（避免重复累积）
