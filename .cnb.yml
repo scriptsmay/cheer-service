@@ -44,8 +44,41 @@ main:
             IMAGE_TAG: CNB_IMAGE_TAG
 
 # 打标签时部署（正式发布）
-$:
+$: 
   tag_push:
+    - name: ci-and-build
+      runner:
+        cpus: 4
+      docker:
+        image: node:20
+      services:
+        - docker
+      env:
+        NODE_ENV: test
+      imports:
+        - https://cnb.cool/scriptsmay/deploy-secrets/-/blob/main/cheer-service.yml
+      stages:
+        # 1. 安装依赖
+        - name: install
+          script: |
+            npm ci
+
+        # 2. 运行测试
+        - name: test
+          script: |
+            npm test
+
+        # 3. 构建 Docker 镜像（tag_push 下使用版本 tag）
+        - name: build-image
+          script: |
+            echo "${CNB_TOKEN}" | docker login --username=${CNB_TOKEN_USER_NAME} --password-stdin ${CNB_DOCKER_REGISTRY}
+            IMAGE_TAG="${CNB_DOCKER_REGISTRY}/scriptsmay/cheer-service:${CNB_BRANCH}"
+            docker build -t ${IMAGE_TAG} -f server/Dockerfile .
+            docker push ${IMAGE_TAG}
+            docker manifest inspect ${IMAGE_TAG} >/dev/null \
+              || { echo "镜像推送后无法在制品库检索到: ${IMAGE_TAG}"; exit 1; }
+            echo "镜像已就绪: ${IMAGE_TAG}"
+
     - name: deploy
       runner:
         cpus: 2
@@ -55,7 +88,6 @@ $:
         - docker
       imports:
         - https://cnb.cool/scriptsmay/deploy-secrets/-/blob/main/cheer-service.yml
-      # 部署串行化：避免并发部署堆积
       lock:
         key: cheer-service-deploy
         wait: true
@@ -95,12 +127,7 @@ $:
             printf '%s' "${REGISTRY_DEPLOY_TOKEN}" | ssh -o BatchMode=yes ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} "
               cd ${DEPLOY_DIR} &&
               docker login docker.cnb.cool -u cnb --password-stdin &&
-              for i in \$(seq 1 6); do
-                docker pull ${REMOTE_PULL_IMAGE} && PULLED=1 && break
-                echo \"第 \${i} 次 docker pull 失败，5s 后重试...\"
-                sleep 5
-              done &&
-              test -n \"\${PULLED:-}\" || { echo '镜像拉取重试耗尽，请确认构建阶段推送是否成功'; exit 1; } &&
+              docker pull ${REMOTE_PULL_IMAGE} &&
               docker compose down api &&
               CHEER_SERVICE_IMAGE=${REMOTE_PULL_IMAGE} docker compose up -d api &&
               docker image prune -f
