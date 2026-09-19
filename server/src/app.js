@@ -61,14 +61,26 @@ app.use('/api/admin', adminRoute);
 app.use('/admin-static', express.static(path.join(__dirname, '..', 'public')));
 
 // ── 健康检查 ──
+const pkgInfo = require('../package.json');
 app.get('/api/health', async (req, res) => {
   try {
     const db = await getDb();
     const adminDb = db.admin();
     const result = await adminDb.command({ ping: 1 });
-    res.json({ status: 'ok', mongo: result.ok === 1 ? 'connected' : 'error', timestamp: new Date().toISOString() });
+    res.json({
+      status: 'ok',
+      version: pkgInfo.version,
+      mongo: result.ok === 1 ? 'connected' : 'error',
+      timestamp: new Date().toISOString()
+    });
   } catch (e) {
-    res.status(503).json({ status: 'error', mongo: 'disconnected', error: e.message, timestamp: new Date().toISOString() });
+    res.status(503).json({
+      status: 'error',
+      version: pkgInfo.version,
+      mongo: 'disconnected',
+      error: e.message,
+      timestamp: new Date().toISOString()
+    });
   }
 });
 

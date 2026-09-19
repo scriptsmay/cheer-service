@@ -871,6 +871,17 @@ function bindEvents() {
     const r = await fetch('/api/admin/ai/config', { headers: authHeaders() });
     if (r.status === 401) { clearToken(); showLogin(); return; }
     showAdmin();
+    // 获取并显示版本信息
+    try {
+      const healthR = await fetch('/api/health');
+      if (healthR.ok) {
+        const healthD = await healthR.json();
+        const verEl = document.getElementById('appVersion');
+        if (verEl && healthD.version) {
+          verEl.textContent = '版本 v' + healthD.version;
+        }
+      }
+    } catch (_) { /* 版本获取失败不影响主流程 */ }
   } catch (e) {
     const banner = document.getElementById('bootError');
     banner.hidden = false;
