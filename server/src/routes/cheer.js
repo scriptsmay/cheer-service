@@ -179,11 +179,10 @@ router.post('/', async (req, res) => {
       created_at: now.toISOString(),
       expires_at: new Date(now.getTime() + 30 * DAY_MS).toISOString(),
     };
-    // 多样性追溯字段：时间上下文与事件命中明细
     if (dateContext) {
       reportDoc.date_context = {
         date_label: dateContext.dateLabel,
-        anchors: dateContext.anchors, // [{kind,text}]
+        anchors: dateContext.anchors,
       };
     }
     if (eventHit && eventPhase) {
@@ -191,12 +190,12 @@ router.post('/', async (req, res) => {
       reportDoc.event_phase = eventPhase.phase;
       reportDoc.event_days_until = eventPhase.daysUntil;
     }
-    // 提示词版本追溯（v1.1.0）：0 = 代码默认，≥1 = 后台自定义版本（可归因/可回滚）
     reportDoc.prompt_version = settings.prompts ? settings.prompts.version || 0 : 0;
-    // 反重复可观测性（v1.1.0）：本组角色分工与多候选模式，供重复率周报统计角色覆盖率
     if (generation.roles) reportDoc.roles = generation.roles;
     if (generation.candidates > 1) reportDoc.candidate_count = generation.candidates;
     await aiReportsCol.doc(reportId).set(reportDoc);
+
+    await commitAiQuota({ pendingCounts: quota.pendingCounts });
 
     const usageCol = await collection('usage_limits');
     await usageCol.doc(quota.receiptId).update({ status: 'success', response: payload, updated_at: now.toISOString() });
@@ -383,7 +382,6 @@ router.post('/stream', async (req, res) => {
       });
 
       if (validation.ok) {
-        // 校验通过，落库保存
         const safeOutput = validation.output;
         const reportId = randomUUID();
         const now = new Date();
@@ -427,6 +425,8 @@ router.post('/stream', async (req, res) => {
         reportDoc.prompt_version = settings.prompts ? settings.prompts.version || 0 : 0;
         if (roles) reportDoc.roles = roles;
         await aiReportsCol.doc(reportId).set(reportDoc);
+
+        await commitAiQuota({ pendingCounts: quota.pendingCounts });
 
         const usageCol = await collection('usage_limits');
         await usageCol.doc(quota.receiptId).update({ status: 'success', response: payload, updated_at: now.toISOString() });
@@ -858,8 +858,8 @@ async function consumeAiQuota({ subjectId, ipHash, requestId, date }) {
     if (receipt) return { allowed: true, receiptId, response: receipt.response || null };
 
     const limits = [
-      { id: `aiCheer_user_${hashValue(subjectId)}_${date}`, limit: readLimit('AI_USER_DAILY_LIMIT', 10), dimension: 'user' },
-      { id: `aiCheer_ip_${ipHash}_${date}`, limit: readLimit('AI_IP_DAILY_LIMIT', 30), dimension: 'ip' },
+      { id: `aiCheer_user_${hashValue(subjectId)}_${date}`, limit: readLimit('AI_USER_DAILY_LIMIT', 100), dimension: 'user' },
+      { id: `aiCheer_ip_${hashValue(ipHash)}_${date}`, limit: readLimit('AI_IP_DAILY_LIMIT', 30), dimension: 'ip' },
       { id: `aiCheer_global_${date}`, limit: readLimit('AI_GLOBAL_DAILY_LIMIT', 500), dimension: 'global' },
     ];
 
@@ -873,19 +873,25 @@ async function consumeAiQuota({ subjectId, ipHash, requestId, date }) {
     }
 
     const now = new Date().toISOString();
-    for (const item of current) {
-      await col.doc(item.id).set({
-        module: 'aiCheer', dimension: item.dimension, date, count: item.count + 1,
-        limit: item.limit, updated_at: now,
-      });
-    }
     await col.doc(receiptId).set({
       module: 'aiCheerRequest', subject_id_hash: hashValue(subjectId, config.ipHashSalt),
       request_id: requestId, status: 'pending', created_at: now,
     });
 
-    return { allowed: true, receiptId, response: null };
+    return { allowed: true, receiptId, pendingCounts: current, response: null };
   });
+}
+
+async function commitAiQuota({ pendingCounts }) {
+  if (!pendingCounts || !pendingCounts.length) return;
+  const now = new Date().toISOString();
+  const col = await collection('usage_limits');
+  for (const item of pendingCounts) {
+    await col.doc(item.id).set({
+      module: 'aiCheer', dimension: item.dimension, date: item.date || item.id.split('_').pop(),
+      count: item.count + 1, limit: item.limit, updated_at: now,
+    });
+  }
 }
 
 async function markReceipt(receiptId, status) {

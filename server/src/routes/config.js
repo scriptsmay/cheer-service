@@ -10,7 +10,7 @@ const { collection } = require('../db/mongo');
 const { successResponse, errorResponse } = require('../services/response');
 const { getRequestId, positiveInt } = require('../utils/helpers');
 
-const DEFAULT_CONFIG = { ask_daily_limit: 10, cheer_daily_limit: 10 };
+const DEFAULT_CONFIG = { ask_daily_limit: 10, cheer_daily_limit: 100 };
 
 const router = express.Router();
 
