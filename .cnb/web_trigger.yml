@@ -1,0 +1,14 @@
+# Web 触发器配置 - 手动触发部署
+branch:
+  - reg: ^main$
+    buttons:
+      - name: 部署新版本
+        event: web_trigger_deploy
+        permissions:
+          roles: [master, developer]
+        inputs:
+          version:
+            name: 版本号
+            type: text
+            placeholder: "v1.1.3"
+            required: true
