@@ -1,5 +1,6 @@
 # cheer-service CNB 流水线配置
-# 功能：main 分支 push 自动测试 + 构建，手动触发部署
+# main push: 仅构建测试，不部署
+# tag_push: 构建测试 + 部署（正式发布）
 
 main:
   push:
@@ -38,12 +39,13 @@ main:
               || { echo "镜像推送后无法在制品库检索到: ${IMAGE_TAG}"; exit 1; }
             echo "镜像已就绪: ${IMAGE_TAG}"
           # exports 的 key 是「导出到后续 Stage / Pipeline 的变量名」。
-          # 原写法 `IMAGE_TAG: BUILD_IMAGE_TAG` 会把值导出成 BUILD_IMAGE_TAG：
-          # 名字像内置变量（实际不是），而 deploy 阶段读的是 IMAGE_TAG，两边对不上，等于白导出。
           # 需要跨 Pipeline 使用的导出名必须带 CNB_ 前缀（否则只在当前 Pipeline 内可见）。
           exports:
             IMAGE_TAG: CNB_IMAGE_TAG
 
+# 打标签时部署（正式发布）
+$:
+  tag_push:
     - name: deploy
       runner:
         cpus: 2
@@ -53,9 +55,7 @@ main:
         - docker
       imports:
         - https://cnb.cool/scriptsmay/deploy-secrets/-/blob/main/cheer-service.yml
-      # 部署串行化：默认同事件下多个 Pipeline 并发，push 密集时会出现
-      # 「后一次构建的部署先跑、前一次随后覆盖回去」以及共享 ssh known_hosts 互相干扰。
-      # wait: true 排队等待，cancel-in-wait: true 只保留最新排队的一条，避免部署堆积。
+      # 部署串行化：避免并发部署堆积
       lock:
         key: cheer-service-deploy
         wait: true
@@ -69,43 +69,29 @@ main:
             chmod 700 ~/.ssh
             printf '%s' "${DEPLOY_SSH_KEY_B64}" | base64 -d > ~/.ssh/id_rsa
             chmod 600 ~/.ssh/id_rsa
-            # 先校验私钥可用，避免 ssh 报 "error in libcrypto" 这类难懂的错
-            ssh-keygen -y -f ~/.ssh/id_rsa >/dev/null || { echo "DEPLOY_SSH_KEY_B64 无法解码为可用私钥，请检查 deploy-secrets"; exit 1; }
+            ssh-keygen -y -f ~/.ssh/id_rsa >/dev/null || { echo "DEPLOY_SSH_KEY_B64 无法解码为可用私钥"; exit 1; }
             ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts 2>/dev/null || true
 
-            # ── 前置自检：远端部署目录必须可写，且已有 .env（.env 是运行时状态，由人工/首次部署维护）──
             printf '%s' "${REGISTRY_DEPLOY_TOKEN}" | ssh -o BatchMode=yes ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} \
-              "set -e; test -d ${DEPLOY_DIR} || { echo '远端部署目录不存在: ${DEPLOY_DIR}'; exit 1; }; test -w ${DEPLOY_DIR} || { echo '远端部署目录不可写: ${DEPLOY_DIR}'; exit 1; }; test -f ${DEPLOY_DIR}/.env || { echo '远端缺少 ${DEPLOY_DIR}/.env，请先按 .env.example 配置'; exit 1; }; echo 远端部署目录自检通过"
+              "set -e; test -d ${DEPLOY_DIR} || { echo '远端部署目录不存在: ${DEPLOY_DIR}'; exit 1; }; test -w ${DEPLOY_DIR} || { echo '远端部署目录不可写: ${DEPLOY_DIR}'; exit 1; }; test -f ${DEPLOY_DIR}/.env || { echo '远端缺少 ${DEPLOY_DIR}/.env'; exit 1; }; echo 远端部署目录自检通过"
 
-            # ── B 方案：仓库是 docker-compose.yml 的唯一事实来源，部署前同步到远端 ──
-            # CI 工作区已检出本仓库，直接 scp 过去即可；只覆盖 docker-compose.yml，
-            # 不触碰远端 .env / logs / bind mount 数据 / 其它文件。
-            # 用 .new + mv 原子替换：ssh 中断也不会留下半截的 compose 文件。
             COMPOSE_REMOTE_TMP="${DEPLOY_DIR}/docker-compose.yml.new"
             scp -q -P ${DEPLOY_PORT} -o BatchMode=yes docker-compose.yml \
               ${DEPLOY_USER}@${DEPLOY_HOST}:${COMPOSE_REMOTE_TMP}
             printf '%s' "${REGISTRY_DEPLOY_TOKEN}" | ssh -o BatchMode=yes ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} "
               set -e
               cd ${DEPLOY_DIR}
-              # 确认同步成功：应含 CHEER_SERVICE_IMAGE 锚点，说明拿到的是新版本
-              grep -q 'CHEER_SERVICE_IMAGE' docker-compose.yml.new || { echo '同步的 docker-compose.yml 不含 CHEER_SERVICE_IMAGE，疑似旧文件'; rm -f docker-compose.yml.new; exit 1; }
-              # 语法自检，坏文件不覆盖线上可用的那份
-              docker compose -f docker-compose.yml.new config -q || { echo 'docker-compose.yml 语法校验失败，已放弃同步'; rm -f docker-compose.yml.new; exit 1; }
+              grep -q 'CHEER_SERVICE_IMAGE' docker-compose.yml.new || { echo '同步的 docker-compose.yml 不含 CHEER_SERVICE_IMAGE'; rm -f docker-compose.yml.new; exit 1; }
+              docker compose -f docker-compose.yml.new config -q || { echo 'docker-compose.yml 语法校验失败'; rm -f docker-compose.yml.new; exit 1; }
               mv docker-compose.yml.new docker-compose.yml
               echo 'docker-compose.yml 已同步到远端'
             "
 
             # ── 部署 ──
-            # 优先用 build-image 阶段导出的 IMAGE_TAG（导出名必须带 CNB_ 前缀才跨 Pipeline 可见，
-            # 见 .cnb.yml 构建阶段的 `exports: CNB_IMAGE_TAG`）；
-            # 兜底按同一规则重新推导，保证 deploy 单跑或导出缺失时行为不变。
-            REMOTE_PULL_IMAGE="${CNB_IMAGE_TAG:-${CNB_DOCKER_REGISTRY}/scriptsmay/cheer-service:${CNB_COMMIT_SHORT}}"
+            # tag_push 事件下 CNB_BRANCH = tag 名（如 v1.0.0）
+            # 镜像 tag 与版本 tag 一一锚定，可回滚、可追溯
+            REMOTE_PULL_IMAGE="${CNB_DOCKER_REGISTRY}/scriptsmay/cheer-service:${CNB_BRANCH}"
             echo "部署镜像: ${REMOTE_PULL_IMAGE}"
-            # 1. 部署令牌经 ssh stdin 传给远端 docker login，避免出现在命令行/进程列表
-            # 2. 必须先 pull 再 up：只 pull 不导出 CHEER_SERVICE_IMAGE 时 compose 仍读远端 .env，会拉错镜像
-            # docker pull 重试：镜像刚 push 完，制品库索引可能有秒级延迟，
-            # 观测到过 push 成功、紧随其后的 pull 仍报 "not found" 的情况。
-            # 重试 6 次（5s 起退避，最长约 2 分钟）可消除这类瞬时失败，不必人工重跑流水线。
             printf '%s' "${REGISTRY_DEPLOY_TOKEN}" | ssh -o BatchMode=yes ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} "
               cd ${DEPLOY_DIR} &&
               docker login docker.cnb.cool -u cnb --password-stdin &&
@@ -123,12 +109,7 @@ main:
         # 健康检查
         - name: health-check
           script: |
-            apk add --no-cache curl openssh-client
-            mkdir -p ~/.ssh && chmod 700 ~/.ssh
-            printf '%s' "${DEPLOY_SSH_KEY_B64}" | base64 -d > ~/.ssh/id_rsa
-            chmod 600 ~/.ssh/id_rsa
-            ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts 2>/dev/null || true
-            # 最多约 60s（原 60s 等待 + 每个失败用例再叠加超时，实际很容易空转近 1 分钟）
+            apk add --no-cache curl
             for i in $(seq 1 30); do
               if curl -sf --max-time 5 "${HEALTH_URL}" >/dev/null 2>&1; then
                 echo "Health check passed"
@@ -136,9 +117,7 @@ main:
               fi
               sleep 2
             done
-            echo "Health check failed，输出远端容器状态与日志便于定位："
-            ssh -o BatchMode=yes ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} \
-              "cd ${DEPLOY_DIR} && docker compose ps api && docker compose logs --tail=80 api" || true
+            echo "Health check failed"
             exit 1
 
       # 失败时回滚
@@ -152,5 +131,4 @@ main:
             chmod 600 ~/.ssh/id_rsa
             ssh-keygen -y -f ~/.ssh/id_rsa >/dev/null || { echo "DEPLOY_SSH_KEY_B64 无法解码为可用私钥，跳过回滚"; exit 1; }
             ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts 2>/dev/null || true
-            # 回滚：用远端 .env 里配置的镜像（CI 路径下远端 compose 已同步为本仓库版本，直接 up 可恢复上一容器）
             ssh -o BatchMode=yes ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} "cd ${DEPLOY_DIR} && docker compose down api && docker compose up -d api"
