@@ -13,7 +13,7 @@ main:
       env:
         NODE_ENV: test
       imports:
-        - https://cnb.cool/scriptsmay/secrets/-/blob/main/cheer-service.yml
+        - https://cnb.cool/scriptsmay/deploy-secrets/-/blob/main/cheer-service.yml
       stages:
         # 1. 安装依赖
         - name: install
@@ -44,7 +44,7 @@ main:
       services:
         - docker
       imports:
-        - https://cnb.cool/scriptsmay/secrets/-/blob/main/cheer-service.yml
+        - https://cnb.cool/scriptsmay/deploy-secrets/-/blob/main/cheer-service.yml
       stages:
         # 部署到远程服务器
         - name: deploy
