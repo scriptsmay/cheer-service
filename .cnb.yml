@@ -28,7 +28,7 @@ main:
         # 3. 构建 Docker 镜像
         - name: build-image
           script: |
-            echo "${CNB_DOCKER_REGISTRY}" | docker login --username=${CNB_TOKEN_USER_NAME} --password-stdin ${CNB_DOCKER_REGISTRY}
+            echo "${CNB_TOKEN}" | docker login --username=${CNB_TOKEN_USER_NAME} --password-stdin ${CNB_DOCKER_REGISTRY}
             IMAGE_TAG="${CNB_DOCKER_REGISTRY}/scriptsmay/cheer-service:${CNB_COMMIT_SHORT}"
             docker build -t ${IMAGE_TAG} -f server/Dockerfile .
             docker push ${IMAGE_TAG}
@@ -54,8 +54,12 @@ main:
             chmod 700 ~/.ssh
             printf '%s' "${DEPLOY_SSH_KEY_B64}" | base64 -d > ~/.ssh/id_rsa
             chmod 600 ~/.ssh/id_rsa
+            # 先校验私钥可用，避免 ssh 报 "error in libcrypto" 这类难懂的错
+            ssh-keygen -y -f ~/.ssh/id_rsa >/dev/null || { echo "DEPLOY_SSH_KEY_B64 无法解码为可用私钥，请检查 deploy-secrets"; exit 1; }
             ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts 2>/dev/null || true
-            ssh ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} "cd ${DEPLOY_DIR} && docker login docker.cnb.cool -u cnb -p \"${CNB_DEPLOY_TOKEN}\" && docker compose pull api && docker compose down api && docker compose up -d api && docker image prune -f"
+            # 部署令牌经 ssh stdin 传给远端 docker login，避免出现在命令行/进程列表
+            printf '%s' "${REGISTRY_DEPLOY_TOKEN}" | ssh -o BatchMode=yes ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} \
+              "cd ${DEPLOY_DIR} && docker login docker.cnb.cool -u cnb --password-stdin && docker compose pull api && docker compose down api && docker compose up -d api && docker image prune -f"
 
         # 健康检查
         - name: health-check
@@ -80,5 +84,6 @@ main:
             chmod 700 ~/.ssh
             printf '%s' "${DEPLOY_SSH_KEY_B64}" | base64 -d > ~/.ssh/id_rsa
             chmod 600 ~/.ssh/id_rsa
+            ssh-keygen -y -f ~/.ssh/id_rsa >/dev/null || { echo "DEPLOY_SSH_KEY_B64 无法解码为可用私钥，跳过回滚"; exit 1; }
             ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts 2>/dev/null || true
-            ssh ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} "cd ${DEPLOY_DIR} && docker compose down api && docker compose up -d api"
+            ssh -o BatchMode=yes ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} "cd ${DEPLOY_DIR} && docker compose down api && docker compose up -d api"
