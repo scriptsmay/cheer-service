@@ -6,7 +6,7 @@ branch:
     buttons:
       - name: 发版部署
         event: web_trigger_release
-        description: 自动打 version tag 推送，触发既有 tag_push 流水线构建并部署（部署进度见 tag_push 构建记录）；版本号留空则自动 +1 patch
+        description: 同步 package.json 版本号并打 version tag 推送，触发既有 tag_push 流水线构建并部署（部署进度见 tag_push 构建记录）；版本号留空则自动 +1 patch
         permissions:
           roles: [owner, master]
         inputs:

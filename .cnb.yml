@@ -1,6 +1,6 @@
 # cheer-service CNB 流水线配置
 # main push: 仅构建测试，不部署
-# web_trigger_release: 网页「发版部署」按钮触发（.cnb/web_trigger.yml），打 tag 后自动走 tag_push 部署
+# web_trigger_release: 网页「发版部署」按钮触发（.cnb/web_trigger.yml），同步 package.json 版本号提交 main 后打 tag，自动走 tag_push 部署
 # tag_push: 构建测试 + 部署（正式发布，顺序执行）
 
 main:
@@ -42,7 +42,8 @@ main:
 
   # 网页「发版部署」按钮（.cnb/web_trigger.yml）：
   # 单测门禁（anchor 复用上方 install/test stage）→ 版本号远端实查（手填或留空 patch+1，查重失败即报错）
-  # → 打 annotated tag 推 CNB → 自动触发下方 tag_push 构建部署。
+  # → npm version 同步 package.json/lock 并提交推 main → 打 annotated tag 指向该提交推 CNB
+  # → 自动触发下方 tag_push 构建部署。
   # 本事件只用内置 CNB_TOKEN（可信事件，repo-code:rw），不 import 密钥仓库，无需 allow_events 授权。
   web_trigger_release:
     - name: release-tag
@@ -91,6 +92,21 @@ main:
 
             git config user.name "cnb-web-trigger"
             git config user.email "cnb-web-trigger@cnb.cool"
+
+            # 同步 package.json / package-lock.json 版本号到新 tag（否则源码版本号与发版漂移）
+            OLD_VER="$(node -p 'require("./package.json").version')"
+            if [ "${OLD_VER}" != "${NEW_TAG#v}" ]; then
+              npm version "${NEW_TAG#v}" --no-git-tag-version
+              git add package.json
+              if [ -f package-lock.json ]; then git add package-lock.json; fi
+              git commit -m "chore: release ${NEW_TAG}"
+              echo "package.json 版本号已同步: ${OLD_VER} → ${NEW_TAG#v}"
+              # 先推 main（版本号提交），tag 再指向该提交——保证部署镜像内版本号一致
+              git push "${REPO_URL}" "HEAD:main"
+            else
+              echo "package.json 已是 ${NEW_TAG#v}，跳过版本号同步提交"
+            fi
+
             git tag -a "${NEW_TAG}" -m "release ${NEW_TAG} (web trigger)"
             git push "${REPO_URL}" "refs/tags/${NEW_TAG}"
             echo "已推送 tag ${NEW_TAG}，tag_push 流水线将自动构建并部署"
