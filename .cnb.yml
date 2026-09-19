@@ -58,6 +58,7 @@ $:
         wait: true
         cancel-in-wait: true
       stages:
+  tag_deploy.production:
         - name: install
           script: |
             npm ci
