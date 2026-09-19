@@ -52,7 +52,7 @@ services:
     restart: "no"
 
   api:
-    image: cheer-service-api:v1.1.0
+    image: ${CHEER_SERVICE_IMAGE:-docker.cnb.cool/scriptsmay/cheer-service:latest}
     build:
       context: .
       dockerfile: server/Dockerfile

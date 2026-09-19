@@ -55,7 +55,7 @@ main:
             printf '%s' "${DEPLOY_SSH_KEY_B64}" | base64 -d > ~/.ssh/id_rsa
             chmod 600 ~/.ssh/id_rsa
             ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts 2>/dev/null || true
-            ssh ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} "cd ${DEPLOY_DIR} && docker compose pull api && docker compose down api && docker compose up -d api && docker image prune -f"
+            ssh ${DEPLOY_USER}@${DEPLOY_HOST} -p ${DEPLOY_PORT} "cd ${DEPLOY_DIR} && docker login docker.cnb.cool -u cnb -p \"${CNB_DEPLOY_TOKEN}\" && docker compose pull api && docker compose down api && docker compose up -d api && docker image prune -f"
 
         # 健康检查
         - name: health-check
