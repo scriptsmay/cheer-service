@@ -188,8 +188,11 @@ $:
               docker pull ${REMOTE_PULL_IMAGE} &&
               docker compose down api &&
               CHEER_SERVICE_IMAGE=${REMOTE_PULL_IMAGE} docker compose up -d api &&
-              docker image prune -f
+              docker image prune -f &&
+              { grep -q '^CHEER_SERVICE_IMAGE=' .env && sed -i 's|^CHEER_SERVICE_IMAGE=.*|CHEER_SERVICE_IMAGE=${REMOTE_PULL_IMAGE}|' .env || echo CHEER_SERVICE_IMAGE=${REMOTE_PULL_IMAGE} >> .env; } || true
             "
+            # 上面最后一段把本次镜像版本写入远端 .env 的 CHEER_SERVICE_IMAGE：compose 的 image 默认值是 :latest，
+            # 若不落盘钉版，后续仅改 .env 配置裸 `docker compose up -d api` 会静默回退到 :latest 旧镜像（2026-09-20 事故）
 
         # 5. 部署后健康检查（坏镜像静默上线的闸门；不通过则触发 failStages 回滚）
         - name: health-check
