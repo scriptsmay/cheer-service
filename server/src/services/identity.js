@@ -4,7 +4,9 @@
  * 身份解析服务 — 替代 TCB CloudBase Auth
  *
  * 三级鉴权链：
- * 1. JWT Bearer token（本地签发验证）
+ * 1. JWT Bearer token（本地签发验证）——携带了 Bearer 但校验失败（畸形/过期/缺 sub）
+ *    时返回 ok:false 拒绝，**不再静默降级匿名**（2026-09-21 拍板：防「Bearer [object Promise]」
+ *    类事故的数据归属错位；未携带 Bearer 才走 2/3 级回退）
  * 2. 旧版 Query Token（兼容过渡期）
  * 3. 匿名回退 — 基于 client_id/IP 生成确定性身份（替代 CloudBase 匿名登录）
  */
@@ -27,8 +29,9 @@ async function resolveIdentity(req) {
       if (payload.sub) {
         return { ok: true, kind: 'session', subjectId: payload.sub, username: payload.username || '' };
       }
+      return { ok: false, kind: 'invalid_bearer' };
     } catch (_) {
-      /* invalid token, fall through */
+      return { ok: false, kind: 'invalid_bearer' };
     }
   }
 

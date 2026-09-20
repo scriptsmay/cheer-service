@@ -14,6 +14,7 @@ const { successResponse, errorResponse } = require('../services/response');
 const { isContentBlocked } = require('../lib/ai-utils');
 const { getCheerSettings, getActiveEventsForDate } = require('../services/settings-store');
 const { getDateContext } = require('../lib/date-context');
+const { makeCheckinId } = require('../utils/checkin-summary');
 const { renderTemplate, DEFAULT_PROMPTS } = require('../lib/prompt-template');
 const {
   getRequestId, getClientIp, shanghaiDate, normalizeClientId,
@@ -194,6 +195,7 @@ router.post('/', async (req, res) => {
     if (generation.roles) reportDoc.roles = generation.roles;
     if (generation.candidates > 1) reportDoc.candidate_count = generation.candidates;
     await aiReportsCol.doc(reportId).set(reportDoc);
+    await linkReportToTodayCheckin(identity.subjectId, reportId);
 
     await commitAiQuota({ pendingCounts: quota.pendingCounts });
 
@@ -429,6 +431,7 @@ router.post('/stream', async (req, res) => {
         // 思考/生成 token 用量落库（观测思考强度与耗时用）
         reportDoc.usage = streamResult.usage;
         await aiReportsCol.doc(reportId).set(reportDoc);
+        await linkReportToTodayCheckin(identity.subjectId, reportId);
 
         await commitAiQuota({ pendingCounts: quota.pendingCounts });
 
@@ -904,6 +907,19 @@ async function markReceipt(receiptId, status) {
     const col = await collection('usage_limits');
     await col.doc(receiptId).update({ status, updated_at: new Date().toISOString() });
   } catch (_) { }
+}
+
+// ── regenerate 语义（2026-09-21 拍板）：打卡后当天再生成时，今日打卡改指最新一版文案，
+// 重载 /me/report 展示最新卡；未打卡用户无 checkin 文档，update 无 upsert 为 no-op ──
+async function linkReportToTodayCheckin(subjectId, reportId) {
+  try {
+    const checkinId = makeCheckinId(subjectId, shanghaiDate().date);
+    const col = await collection('checkins');
+    await col.doc(checkinId).update({ report_id: reportId, updated_at: new Date().toISOString() });
+  } catch (error) {
+    // 打卡关联失败不阻断生成主流程（下次生成会再尝试指向最新）
+    console.warn('[ai-cheer] link report to today checkin failed', { message: getErrorMessage(error) });
+  }
 }
 
 // ── 昨日赛事句式记忆（避免连续两天注入同一句式，形成新的公式化）──

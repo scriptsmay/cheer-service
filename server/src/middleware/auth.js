@@ -12,7 +12,9 @@ const { normalizeClientId, hashValue, getClientIp } = require('../utils/helpers'
 /**
  * Express 鉴权中间件
  * 支持三种鉴权方式：
- * 1. JWT Bearer token（本地签发验证）
+ * 1. JWT Bearer token（本地签发验证）——携带了 Bearer 但校验失败（畸形/过期/缺 sub）
+ *    时挂 ok:false 的 identity，交由路由层拒绝（本中间件保持不拦截设计）；
+ *    未携带 Bearer 才走 2/3 级回退（2026-09-21 拍板收紧）
  * 2. 旧版 Query Token（兼容过渡期）
  * 3. 匿名回退 — 基于 client_id/IP 生成确定性身份
  *
@@ -26,11 +28,13 @@ function authMiddleware(req, res, next) {
     const token = match[1].trim();
     try {
       const payload = jwt.verify(token, config.jwtSecret);
-      req.identity = { ok: true, kind: 'session', subjectId: payload.sub };
-      return next();
-    } catch (_) {
-      /* invalid token, fall through to legacy */
-    }
+      if (payload.sub) {
+        req.identity = { ok: true, kind: 'session', subjectId: payload.sub };
+        return next();
+      }
+    } catch (_) { /* fall through to invalid_bearer */ }
+    req.identity = { ok: false, kind: 'invalid_bearer' };
+    return next();
   }
 
   // 2. 旧版 Query Token
