@@ -1,42 +1,39 @@
 'use strict';
 
 /**
- * syncSchedule job — 从本地 kpl-data-daily 数据目录全量同步赛程
+ * syncSchedule job — 全量同步赛程（采集产物 → MongoDB）
  * 由 syncKplCrawl 编排调用（每日 09:00 定时窗口 / 后台手动同步），不独立调度
+ *
+ * 数据来源由 kpl-source 抽象：local（宿主机挂载目录）或 github（GitHub raw）。
  */
 
-const fs = require('fs');
-const path = require('path');
 const { collection } = require('../db/mongo');
 const { mergeScheduleMatches, recordSyncSnapshot } = require('../lib/schedule-merge');
-
-const KPL_DATA_DIR = process.env.KPL_DATA_DIR || '/app/kpl-data-daily';
+const kplSource = require('../lib/kpl-source');
 
 async function syncSchedule() {
   const result = { season: null, status: 'pending', matches: 0, error: null };
 
   try {
     // 1. 读取赛季元信息
-    const seasonRaw = await fetchData('data/latest/current-season.json');
-    if (!seasonRaw) {
+    const seasonMeta = await kplSource.readKplJson('data/latest/current-season.json');
+    if (!seasonMeta) {
       result.status = 'error';
       result.error = 'current-season.json not found';
       await recordSyncSnapshot({ type: 'schedule', season: null, status: 'error', error: result.error });
       return result;
     }
-    const seasonMeta = JSON.parse(seasonRaw);
     const season = seasonMeta.current || seasonMeta.season;
     result.season = season;
 
     // 2. 读取赛程文件
-    const scheduleRaw = await fetchData(`data/derived/${season}/schedule.json`);
-    if (!scheduleRaw) {
+    const schedule = await kplSource.readKplJson(`data/derived/${season}/schedule.json`);
+    if (!schedule) {
       result.status = 'skipped';
       result.error = 'schedule.json not found';
       await recordSyncSnapshot({ type: 'schedule', season, status: 'skipped', error: result.error });
       return result;
     }
-    const schedule = JSON.parse(scheduleRaw);
     const data = schedule.data || schedule;
     const matches = data.matches || [];
     result.matches = matches.length;
@@ -78,17 +75,6 @@ async function syncSchedule() {
   }
 
   return result;
-}
-
-async function fetchData(relPath) {
-  const fullPath = path.join(KPL_DATA_DIR, relPath);
-  console.log(`[sync-schedule] Reading: ${fullPath}`);
-  try {
-    return fs.readFileSync(fullPath, 'utf-8');
-  } catch (e) {
-    console.error(`[sync-schedule] Read failed: ${fullPath} - ${e.message}`);
-    return null;
-  }
 }
 
 module.exports = { syncSchedule };

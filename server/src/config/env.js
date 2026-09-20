@@ -51,8 +51,16 @@ const config = {
   // 迁移后将改为容器内本地文件读取，见 docs/kpl-crawl-migration.md
   dataBaseUrl: process.env.DATA_BASE_URL || '',
 
-  // kpl-data-daily 本地数据目录（容器内挂载路径）
+  // kpl-data-daily 本地数据目录（local 数据源模式的挂载路径）
   kplDataDir: process.env.KPL_DATA_DIR || '/app/kpl-data-daily',
+
+  // KPL 采集产物的数据源：local（宿主机挂载目录）| github（GitHub raw）
+  // 业务分离后采集在宿主机 timer，产物已 git 备份回 kpl_data_daily 仓库，
+  // github 模式可摆脱宿主机挂载依赖（免费云迁移 Phase 1），默认 local 可一键回退。
+  kplSource: (process.env.KPL_SOURCE || 'local').toLowerCase(),
+  kplGithubRawBase: process.env.KPL_GITHUB_RAW_BASE
+    || 'https://raw.githubusercontent.com/scriptsmay/kpl_data_daily/main',
+  kplFetchTimeoutMs: parseInt(process.env.KPL_FETCH_TIMEOUT_MS || '15000', 10),
 
   // KPL 数据链路总开关（CRAWL_ENABLED=false 时暂停 kpl 同步与实时赛程任务）
   // 用于维护期整体暂停 KPL 数据链路

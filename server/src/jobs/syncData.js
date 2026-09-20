@@ -1,40 +1,37 @@
 'use strict';
 
 /**
- * syncData job — 从本地 kpl-data-daily 数据目录读取赛季概览写入 MongoDB
+ * syncData job — 从 kpl-data-daily 采集产物读取赛季概览写入 MongoDB
  * 由 syncKplCrawl 编排调用（每日 09:00 定时窗口 / 后台手动同步），不独立调度
+ *
+ * 数据来源由 kpl-source 抽象：local（宿主机挂载目录）或 github（GitHub raw）。
  */
 
-const fs = require('fs');
-const path = require('path');
 const { collection } = require('../db/mongo');
 const crypto = require('crypto');
-
-const KPL_DATA_DIR = process.env.KPL_DATA_DIR || '/app/kpl-data-daily';
+const kplSource = require('../lib/kpl-source');
 
 async function syncData() {
   const results = { season: null, synced: [], skipped: [], errors: [] };
 
   try {
     // 1. 读取当前赛季
-    const seasonRaw = await fetchData('data/latest/current-season.json');
-    if (!seasonRaw) {
+    const seasonMeta = await kplSource.readKplJson('data/latest/current-season.json');
+    if (!seasonMeta) {
       results.errors.push('current-season.json not found');
       return results;
     }
-    const seasonMeta = JSON.parse(seasonRaw);
     const season = seasonMeta.current || seasonMeta.season;
     results.season = season;
     console.log(`[sync] Current season: ${season}`);
 
     // 2. 读取 overview.json
-    const overviewRaw = await fetchData(`data/derived/${season}/overview.json`);
-    if (!overviewRaw) {
+    const overview = await kplSource.readKplJson(`data/derived/${season}/overview.json`);
+    if (!overview) {
       console.warn(`[sync] overview.json not found for ${season}`);
       results.skipped.push('overview.json');
       return results;
     }
-    const overview = JSON.parse(overviewRaw);
     const playerInfo = overview.data && overview.data.player_info ? overview.data.player_info : overview;
     console.log(`[sync] Overview loaded: ${playerInfo.latest_nickname} - ${season}`);
 
@@ -92,7 +89,7 @@ async function syncData() {
     const syncCol = await collection('sync_snapshots');
     await syncCol.add({
       season, type: 'daily', status: 'success',
-      source: `local:data/derived/${season}/overview.json`,
+      source: kplSource.describeSource(`data/derived/${season}/overview.json`),
       updated_at: new Date().toISOString(),
     });
     results.synced.push('sync_snapshots');
@@ -107,17 +104,6 @@ async function syncData() {
   }
 
   return results;
-}
-
-async function fetchData(relPath) {
-  const fullPath = path.join(KPL_DATA_DIR, relPath);
-  console.log(`[sync] Reading: ${fullPath}`);
-  try {
-    return fs.readFileSync(fullPath, 'utf-8');
-  } catch (e) {
-    console.error(`[sync] Read failed: ${fullPath} - ${e.message}`);
-    return null;
-  }
 }
 
 function extractMetrics(overview, seasonId) {
