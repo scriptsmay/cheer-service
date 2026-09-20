@@ -61,8 +61,6 @@ services:
     ports:
       - "19091:3000"
     volumes:
-      # kpl-data-daily 数据挂载：宿主机 systemd timer 执行爬虫写入数据，容器读取并同步到 MongoDB
-      - /root/kpl-data-daily:/app/kpl-data-daily:ro
       - api-data:/app/data
       - ./logs:/app/logs
     env_file:
