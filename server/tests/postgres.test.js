@@ -35,22 +35,8 @@ function fakeExecutor(rowsByCall) {
 }
 
 describe('normalizeUri', () => {
-  test('supplements sslmode=require when absent', () => {
-    assert.equal(
-      normalizeUri('postgresql://u:p@h:5432/postgres'),
-      'postgresql://u:p@h:5432/postgres?sslmode=require'
-    );
-  });
-
-  test('keeps existing sslmode and appends with &', () => {
-    assert.equal(
-      normalizeUri('postgresql://u:p@h:5432/postgres?sslmode=disable'),
-      'postgresql://u:p@h:5432/postgres?sslmode=disable'
-    );
-    assert.equal(
-      normalizeUri('postgresql://u:p@h:5432/postgres?x=1'),
-      'postgresql://u:p@h:5432/postgres?x=1&sslmode=require'
-    );
+  test('passes uri through unchanged (TLS 由 ssl 对象控制，防 sslmode 覆盖)', () => {
+    assert.equal(normalizeUri('postgresql://u:p@h:5432/postgres'), 'postgresql://u:p@h:5432/postgres');
   });
 
   test('throws when uri missing', () => {

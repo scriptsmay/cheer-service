@@ -22,10 +22,24 @@ const ORDER_FIELD_RE = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
 let pool;
 
-/** 归一化连接串：Supabase 池化器要求 TLS，缺 sslmode 时补 require */
+/**
+ * TLS 配置：Supabase 池化器强制 TLS。官方 CA（prod-ca-2022）未随仓分发时降级为
+ * rejectUnauthorized:false——流量仍全程 TLS 加密，仅跳过服务端身份校验
+ * （Supabase 官方 node-postgres 配方同款）。
+ */
+function sslConfig() {
+  return { rejectUnauthorized: false };
+}
+
+/**
+ * TLS：由 ssl 对象统一控制（TLS 加密 + 跳过服务端身份校验，Supabase 官方
+ * node-postgres 配方同款）。注意不能在连接串里写 sslmode——pg-connection-string
+ * 会用 URL 参数覆盖显式 ssl 对象，导致 require 被按 verify-full 处理而握手失败。
+ * 连接串必须存在但不做改写。
+ */
 function normalizeUri(uri) {
   if (!uri) throw new Error('POSTGRES_URI 未配置（DB_DRIVER=postgres 时必填）');
-  return uri.includes('sslmode=') ? uri : `${uri}${uri.includes('?') ? '&' : '?'}sslmode=require`;
+  return uri;
 }
 
 function getPool(options = {}) {
@@ -35,6 +49,7 @@ function getPool(options = {}) {
       connectionString: normalizeUri(options.pgUri || config.pgUri),
       max: options.pgPoolMax || config.pgPoolMax,
       idleTimeoutMillis: 30000,
+      ssl: sslConfig(),
     });
   }
   return pool;
