@@ -59,13 +59,25 @@ async function migrateCollection(name) {
   return { name, mongoCount: data.length, pgCount, imported, sampleOk };
 }
 
+/** 键序无关规范化：_id 注入位置（mongo 在首、pg set 注入在尾）不影响等价性判断 */
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === 'object') {
+    return Object.keys(value).sort().reduce((acc, key) => {
+      acc[key] = canonical(value[key]);
+      return acc;
+    }, {});
+  }
+  return value;
+}
+
 async function compareSamples(name, mongoSamples, pgCol) {
   for (const raw of mongoSamples) {
     const id = String(raw._id);
-    const expected = JSON.parse(JSON.stringify(normalizeDoc(raw)));
+    const expected = canonical(JSON.parse(JSON.stringify(normalizeDoc(raw))));
     const { data } = await pgCol.doc(id).get();
     if (!data.length) return { id, ok: false, reason: 'missing' };
-    if (JSON.stringify(data[0]) !== JSON.stringify(expected)) return { id, ok: false, reason: 'mismatch' };
+    if (JSON.stringify(canonical(data[0])) !== JSON.stringify(expected)) return { id, ok: false, reason: 'mismatch' };
   }
   return { ok: true };
 }
