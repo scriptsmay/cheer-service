@@ -10,6 +10,9 @@
  * 流程：逐集合 Mongo 全量导出 → ObjectId/嵌套 id 转 hex 字符串 → 逐条 upsert 进 PG
  *       → 双端计数核对 + 每集合抽样 JSON 比对 → 输出对账表。
  * weekly_story 不迁移（2026-09-21 拍板清理）。导入用 upsert，脚本可安全重跑。
+ *
+ * 切换后补迁单个集合用 --only=a,b（set 为整文档替换，全量重跑会用旧 Mongo 文档
+ * 覆盖切流后 PG 侧的新写入，如 checkins）。
  */
 
 const path = require('path');
@@ -31,6 +34,7 @@ const COLLECTIONS = [
   'app_config',
   'season_snapshots',
   'sync_snapshots',
+  'cheer_events',
 ];
 
 /** ObjectId（含嵌套字段）→ hex 字符串，保证可 JSON 序列化且与 PG 存储形态一致 */
@@ -84,10 +88,17 @@ async function compareSamples(name, mongoSamples, pgCol) {
 
 async function main() {
   if (!config.pgUri) throw new Error('POSTGRES_URI 未配置');
-  console.log(`=== Mongo → Postgres 迁移（schema: ${config.pgSchema}，排除 weekly_story） ===`);
+  const onlyArg = process.argv.find((a) => a.startsWith('--only='));
+  const only = onlyArg ? onlyArg.slice('--only='.length).split(',').filter(Boolean) : null;
+  if (only) {
+    const unknown = only.filter((n) => !COLLECTIONS.includes(n));
+    if (unknown.length) throw new Error(`--only 含未知集合: ${unknown.join(', ')}`);
+  }
+  const targets = only || COLLECTIONS;
+  console.log(`=== Mongo → Postgres 迁移（schema: ${config.pgSchema}，排除 weekly_story${only ? `，仅 ${only.join(', ')}` : ''}） ===`);
 
   const report = [];
-  for (const name of COLLECTIONS) {
+  for (const name of targets) {
     const row = await migrateCollection(name);
     report.push(row);
     console.log(
@@ -101,7 +112,7 @@ async function main() {
     console.error('MIGRATION_VERIFY_FAILED:', mismatches.map((r) => r.name).join(', '));
     process.exitCode = 1;
   } else {
-    console.log('MIGRATION_VERIFY_OK: 全部 12 集合计数一致、抽样一致');
+    console.log(`MIGRATION_VERIFY_OK: 全部 ${report.length} 集合计数一致、抽样一致`);
   }
   await mongo.close();
   await pg.close();
