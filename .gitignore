@@ -6,3 +6,4 @@ data/export/
 *.log
 .workbuddy/
 .DS_Store
+*.bak
