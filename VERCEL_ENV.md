@@ -13,15 +13,16 @@
 
 | 变量名 | 说明 | 示例值 |
 |--------|------|--------|
-| `SUPABASE_DB_PASSWORD` | Supabase 数据库密码 | `<从 Supabase 控制台获取>` |
-| `PG_URI` | Postgres 连接串（可选，优先用密码） | `postgresql://postgres:<password>@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres?sslmode=require` |
+| `POSTGRES_URI` | **必需** Postgres 完整连接串（含主机/端口/数据库/密码） | `postgresql://postgres:<password>@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres?sslmode=require` |
+| `DB_DRIVER` | 数据库驱动（postgres/mongo） | `postgres` |
+| `PG_SCHEMA` | Schema 名称（默认 cheer） | `cheer` |
+| `PG_POOL_MAX` | 连接池最大连接数（默认 5） | `5` |
 
-## 数据库驱动切换
+## 数据库回退（Mongo）
 
 | 变量名 | 说明 | 示例值 |
 |--------|------|--------|
-| `DB_DRIVER` | 数据库驱动（postgres/mongo） | `postgres` |
-| `MONGO_URI` | Mongo 连接串（回退用） | `<Mongo 连接串>` |
+| `MONGO_URI` | Mongo 连接串（DB_DRIVER=mongo 时生效，回退用） | `<Mongo 连接串>` |
 
 ## Upstash Redis（可选）
 
