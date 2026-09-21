@@ -278,7 +278,7 @@ npm test
 | `JWT_SECRET` | JWT 签名密钥 |
 | `AI_BASE_URL` | OpenAI 兼容 API 地址（默认 DeepSeek） |
 | `AI_API_KEY` | AI 服务 API Key |
-| `AI_MODEL` | AI 模型名称（默认 `deepseek-chat`） |
+| `AI_MODEL` | AI 模型名称（默认 `deepseek-v4-flash`） |
 | `AUTH_TOKEN` | 旧版 Token 鉴权 |
 | `APP_USERS` | JWT 登录用户表（JSON 数组） |
 | `ALLOWED_ORIGINS` | CORS 白名单（逗号分隔） |
