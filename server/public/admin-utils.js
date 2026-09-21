@@ -31,16 +31,6 @@ function formatTime(isoStr) {
       + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
   } catch { return isoStr; }
 }
-function formatTimeCST(isoStr) {
-  if (!isoStr) return '-';
-  try {
-    return new Date(isoStr).toLocaleString('zh-CN', {
-      timeZone: 'Asia/Shanghai', hour12: false,
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit',
-    });
-  } catch { return isoStr; }
-}
 function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]

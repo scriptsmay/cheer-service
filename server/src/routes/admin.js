@@ -104,7 +104,6 @@ router.get('/sync/status', requireAuth, async (req, res) => {
         error: schedule.error || null,
       } : null,
       player_overview: playerOverview,
-      schedules: getScheduleList(true),
     });
   } catch (err) {
     console.error('[admin] sync status error:', err.message);
@@ -248,7 +247,7 @@ router.post('/ai/test', requireAuth, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════
-// 应援文案数据模式 / 定时任务配置（需登录，改完立即生效）
+// 应援文案数据模式 / 事件 / 提示词配置（需登录，改完立即生效）
 // ═══════════════════════════════════════════════
 
 const CHEER_MODE_LABELS = {

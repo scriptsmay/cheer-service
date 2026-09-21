@@ -61,9 +61,8 @@ docker exec cheer-mongo-dev mongosh --quiet --eval 'db.hello().isWritablePrimary
 # Mongo 指向本地容器（去掉生产用的账号/authSource）
 MONGO_URI=mongodb://localhost:27017/wuyan?replicaSet=rs0
 
-# 关掉两个定时任务，避免本地静默跑 cron（采集第三方 / 周报任务）
-CRAWL_ENABLED=false
-WEEKLY_STORY_ENABLED=false
+# 关掉容器内调度器，避免本地静默跑 cron（kpl_crawl / cleanup_ai）
+SCHEDULER_ENABLED=false
 ```
 
 其余键（`AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` / `JWT_SECRET` / `APP_USERS` /

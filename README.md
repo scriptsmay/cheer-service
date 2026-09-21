@@ -32,11 +32,11 @@ cheer-service/
 │   │   │   ├── overview.js         # 赛季概览
 │   │   │   ├── live.js             # 直播数据
 │   │   │   ├── schedule.js         # 赛程数据
-│   │   │   ├── story.js            # 周报故事卡
 │   │   │   ├── heroes.js           # 英雄数据
 │   │   │   ├── cheer.js            # AI 应援文案生成
 │   │   │   ├── ask.js              # AI 小秘书问答
 │   │   │   ├── checkin.js          # 打卡系统
+│   │   │   ├── cron.js             # Vercel Cron 入口（serverless 下的定时任务）
 │   │   │   └── admin.js            # 运维管理 + 数据同步
 │   │   ├── services/               # AI、身份、响应封装、AI 配置持久化
 │   │   │   ├── ai.js               # OpenAI 兼容 API 封装
@@ -51,12 +51,12 @@ cheer-service/
 │   │   │   └── checkin-summary.js  # 打卡摘要计算
 │   │   └── jobs/                   # 定时任务调度
 │   │       ├── scheduler.js        # cron 调度器
+│   │       ├── schedules.js        # 任务与 cron 表达式单一数据源
 │   │       ├── syncKplCrawl.js     # KPL 数据同步编排（变更检测 → syncData/syncSchedule）
 │   │       ├── syncData.js         # 本地数据文件 → MongoDB
 │   │       ├── syncSchedule.js     # 本地赛程文件 → MongoDB
 │   │       ├── syncScheduleLive.js # 比赛窗口内实时赛程同步
 │   │       ├── syncLive.js         # 直播数据同步（⚠️ 已禁用，未注册进调度器，见 docs/kpl-crawl-migration.md 勘误）
-│   │       ├── weeklyStory.js      # AI 周故事卡生成
 │   │       └── cleanupAiReports.js # 过期 AI 报告清理
 │   ├── Dockerfile
 │   └── tests/                      # 单元测试
@@ -180,7 +180,6 @@ cp .env.deploy.example .env.deploy
 | `/api/overview` | GET | Token | 赛季概览（选手信息、生涯/赛季统计、英雄 Top10） |
 | `/api/live` | GET | Token | 直播数据（按年月查询，含汇总统计） |
 | `/api/schedule` | GET | Token | 赛程数据（含实时窗口状态计算） |
-| `/api/story` | GET | Token | 周报故事卡（AI 生成，含周环比数据） |
 | `/api/heroes` | GET | Token | 英雄数据（胜率、出场数等） |
 | `/api/cheer` | POST | JWT | AI 应援文案生成（4 种心情，含数据引用校验） |
 | `/api/ask` | POST | JWT | AI 小秘书问答（基于赛季/直播/赛程数据） |
@@ -199,8 +198,7 @@ cp .env.deploy.example .env.deploy
 | `/api/admin/ai/test` | POST | JWT | 测试 AI 连通性 |
 | `/api/admin/sync/status` | GET | JWT | 查询同步状态和选手数据概览 |
 | `/api/admin/sync/crawl` | POST | JWT | 手动触发 KPL 数据同步（变更检测+入库） |
-| `/api/admin/scheduler/config` | GET | JWT | 查看周报开关与定时任务列表 |
-| `/api/admin/scheduler/config` | PUT | JWT | 更新周报开关（采集节奏归宿主机 timer，不在后台调整） |
+| `/api/cron/daily` | GET | `Bearer CRON_SECRET` | Vercel Cron 入口（cleanup_ai + kpl_crawl 合并执行） |
 
 鉴权方式：
 - **JWT**: `Authorization: Bearer <token>`
@@ -208,15 +206,16 @@ cp .env.deploy.example .env.deploy
 
 ## 定时任务
 
+容器内 node-cron 调度（任务清单单一数据源在 `server/src/jobs/schedules.js`，cron 为固定值，不提供后台调整入口）：
+
 | Cron 表达式 | 任务 | 说明 |
 |-------------|------|------|
-| `0 9 * * *` | kpl_crawl (syncKplCrawl) | 读取宿主机 timer 采集落盘的数据，检测变更后触发 syncData + syncSchedule 入库（采集与 git 备份在宿主机 systemd timer：每日 03:00 全量 / 每 6 小时赛程） |
-| `*/10 * * * *` | syncScheduleLive | 实时赛程同步，仅比赛窗口内激活（调用 KPL 官方 API） |
-| `0 5 * * 1` | weeklyStory | 每周一 05:00，AI 生成周故事卡（基于周环比快照） |
+| `0 9 * * *` | kpl_crawl (syncKplCrawl) | 读取采集产物（本地挂载或 GitHub raw），检测变更后触发 syncData + syncSchedule 入库（采集在 kpl-data-daily 宿主机 systemd timer：每日 03:00 全量 / 每 6 小时赛程） |
 | `20 3 * * *` | cleanupAiReports | 每日 03:20，清理过期 AI 报告（保留 under_review 状态） |
 
-> `CRAWL_ENABLED=false` 暂停 KPL 数据链路（kpl_crawl 同步任务、syncScheduleLive 实时赛程），周报与清理任务不受影响。
-> cron 均为容器内固定值；采集/赛程节奏在 kpl-data-daily 仓库 `deploy/systemd/` 的 timer 上调整。
+> Vercel 部署下 `SCHEDULER_ENABLED=false` 关闭容器内调度，两个任务由 Vercel Cron 每日合并触发 `GET /api/cron/daily`。
+> `CRAWL_ENABLED=false` 暂停 KPL 数据链路（kpl_crawl 同步任务），清理任务不受影响。
+> 采集/赛程节奏在 kpl-data-daily 仓库 `deploy/systemd/` 的 timer 上调整。
 
 ## 数据采集架构
 
@@ -245,7 +244,7 @@ kpl-data-daily（宿主机 /root/kpl-data-daily，systemd timer）
 
 - **AI 配置管理**：查看/修改 AI Base URL、API Key、Model，修改后立即生效（无需重启容器）
 - **AI 连通性测试**：发送测试请求验证 AI 服务可用性
-- **数据同步控制**：查看同步状态（最近同步时间/状态/选手概览），手动触发同步；周报任务开关（采集节奏由宿主机 timer 管理，不在后台调整）
+- **数据同步控制**：查看同步状态（最近同步时间/状态/选手概览），手动触发同步（采集节奏由宿主机 systemd timer 管理，后台不提供定时任务调整入口）
 - 配置优先级：`/app/data/ai-config.json`（管理页面修改）> 环境变量（docker-compose 默认值）
 
 ## 测试

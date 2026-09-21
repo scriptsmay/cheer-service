@@ -80,9 +80,6 @@ const config = {
   // AI 文案数据模式：season | career | emotion（DB 优先，此为兜底默认）
   cheerDataMode: (process.env.CHEER_DATA_MODE || 'season').toLowerCase(),
 
-  // weekly_story 定时任务默认开关（DB 优先，此为兜底默认）
-  weeklyStoryEnabled: process.env.WEEKLY_STORY_ENABLED !== 'false',
-
   // 服务端口
   port: parseInt(process.env.PORT || '3000', 10),
 

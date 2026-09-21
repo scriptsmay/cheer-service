@@ -13,8 +13,8 @@ cheer-service 已有 node-cron 定时基础设施（部署在腾讯云 Docker）
 > **勘误（2026-09 复核）**：
 >
 > 1. 上文原表述「`cal.kplwuyan.site` 域名不存在且从未有过静态站点部署」**不成立**——该域名现有站点在线，其 `GET /api/streams?year=&month=` 接口正常返回直播数据。`syncLive` 无法工作的直接原因是 `DATA_BASE_URL` 未配置，而非域名不存在。
-> 2. `syncLive` 不在调度器中：`server/src/jobs/scheduler.js` 仅注册 `kpl_crawl`、`kpl_live`（→`syncScheduleLive`）、`weekly_story`、`cleanup_ai` 四项。因此 **`GET /api/live` 返回的是不再更新的历史数据**——`live_streams` 集合在 CloudBase 迁移清单内（`scripts/migrate-data.js:22`），现有记录来自迁移期导入。如需恢复：配置 `DATA_BASE_URL`，并把 `syncLive` 重新注册进调度器。
-> 3. 下文时间线中的 `03:00`/`04:00`/`05:00`/`06:00` 为本次迁移当时的计划值，不代表现行调度；现行 cron 以 `server/src/jobs/schedules.js` 为准，且可被 `app_config.scheduler_settings` 在运行时覆盖。
+> 2. `syncLive` 不在调度器中：`server/src/jobs/scheduler.js` 现仅注册 `kpl_crawl` 与 `cleanup_ai` 两项（`kpl_live` / `weekly_story` 已随 v1.4.0 Phase 3 移除）。因此 **`GET /api/live` 返回的是不再更新的历史数据**——`live_streams` 集合在 CloudBase 迁移清单内（`scripts/migrate-data.js:22`），现有记录来自迁移期导入。如需恢复：配置 `DATA_BASE_URL`，并把 `syncLive` 重新注册进调度器。
+> 3. 下文时间线中的 `03:00`/`04:00`/`05:00`/`06:00` 为本次迁移当时的计划值，不代表现行调度；现行 cron 以 `server/src/jobs/schedules.js` 为准，为容器内固定值、无运行时覆盖入口（`app_config.scheduler_settings` 与后台调度配置已随 Phase 3 废弃）。
 
 ## 架构变化
 

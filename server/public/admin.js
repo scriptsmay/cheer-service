@@ -22,7 +22,7 @@ function renderRoute() {
   });
   ROUTES.forEach((k) => { document.getElementById('view-' + k).hidden = (k !== r); });
   document.title = ROUTE_TITLES[r] + ' · Wuyan Cheer 管理后台';
-  ({ overview: refreshOverview, ai: refresh, cheer: refreshCheerSection, sync: refreshSyncSection }[r])();
+  ({ overview: refreshOverview, ai: refresh, cheer: refreshCheerSection, sync: refreshSyncStatus }[r])();
 }
 window.addEventListener('hashchange', renderRoute);
 
@@ -628,7 +628,7 @@ async function deleteEvent(id) {
 }
 
 /* ════════════════════════════════════════════════
- * 8. 数据同步与周报任务
+ * 8. 数据同步
  * ════════════════════════════════════════════════ */
 async function refreshSyncStatus() {
   const el = document.getElementById('syncStatus');
@@ -683,20 +683,6 @@ async function refreshSyncStatus() {
     document.getElementById('ovSyncDaily').innerHTML = d.last_daily_sync ? statusBadge(d.last_daily_sync.status) : '<span class="muted-12">暂无</span>';
     document.getElementById('ovSyncSchedule').innerHTML = d.last_schedule_sync ? statusBadge(d.last_schedule_sync.status) : '<span class="muted-12">暂无</span>';
     document.getElementById('ovSyncTime').textContent = d.last_daily_sync ? formatTime(d.last_daily_sync.updated_at) : '-';
-
-    const scheduleEl = document.getElementById('scheduleList');
-    if (Array.isArray(d.schedules)) {
-      const colls = d.schedules.filter((s) => s.category === 'collection');
-      if (colls.length > 0) {
-        scheduleEl.innerHTML = colls.map((s) => '<div class="schedule-item">'
-          + '<b>' + escapeHtml(s.name) + '</b> <span class="cron-code">' + escapeHtml(s.cron) + '</span><br>'
-          + '<span class="dim">' + escapeHtml(s.description) + '</span>'
-          + (s.next_run ? '<br><span class="ok-text fs-12">下次执行 ' + formatTimeCST(s.next_run) + '</span>' : '')
-          + '</div>').join('');
-      } else {
-        scheduleEl.innerHTML = '<span class="muted-12">无采集任务</span>';
-      }
-    }
   } catch (e) {
     el.innerHTML = '<div class="result error result--flush">网络错误：' + escapeHtml(e.message) + '</div>';
   }
@@ -721,15 +707,6 @@ async function triggerCrawl() {
   btn.innerHTML = '手动同步';
 }
 
-// 调度配置已废弃（Phase 3），周报任务走 Vercel Cron /api/cron/daily
-async function refreshSchedulerConfig() {
-  document.getElementById('ovTaskWeekly').textContent = '已废弃';
-  document.getElementById('ovTaskWeekly').className = 'muted-12';
-}
-async function saveSchedulerConfig() {
-  toast('调度配置已废弃，周报任务走 Vercel Cron', 'error');
-}
-
 /* ════════════════════════════════════════════════
  * 9. 总览
  * ════════════════════════════════════════════════ */
@@ -744,7 +721,6 @@ async function refreshOverview() {
   ovRefreshing = false;
 }
 function refreshCheerSection() { refreshCheerMode(); refreshEvents(); refreshPrompts(); }
-function refreshSyncSection() { refreshSyncStatus(); refreshSchedulerConfig(); }
 
 /* ════════════════════════════════════════════════
  * 10. 事件绑定与初始化

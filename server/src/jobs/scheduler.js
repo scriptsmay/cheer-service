@@ -5,7 +5,7 @@
  *
  * 任务句柄保存在 Map 中。cron 表达式统一取自 schedules.js 的固定默认值：
  * KPL 数据采集已在宿主机 systemd timer 执行（业务分离），容器内任务只负责
- * 读取挂载数据同步 MongoDB 与周报/清理，不再提供后台改频道的入口。
+ * 读取采集产物同步入库与 AI 报告清理，不再提供后台调整入口。
  */
 
 const cron = require('node-cron');
@@ -13,7 +13,6 @@ const config = require('../config/env');
 const { syncKplCrawl } = require('./syncKplCrawl');
 const { cleanupAiReports } = require('./cleanupAiReports');
 const { CRON } = require('./schedules');
-const { getSchedulerSettings } = require('../services/settings-store');
 
 // 注：jobs/syncLive.js 未在此导入、也不注册进调度器——它依赖部署中未提供的
 // DATA_BASE_URL（见 server/src/config/env.js），迁移前即被禁用。详见该文件头部说明

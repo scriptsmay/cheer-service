@@ -3,9 +3,8 @@
 /**
  * 运行时配置存储 — app_config 集合 + 应援事件表
  *
- * 统一封装两类线上可改配置，供「文案生成」与「调度器」共享读取：
+ * 统一封装两类线上可改配置，供「文案生成」共享读取：
  *   - app_config/cheer_settings    { data_mode, date_context_enabled, humanize_enabled, event_context_enabled }
- *   - app_config/scheduler_settings { weekly_story_enabled }
  *   - cheer_events（集合，每事件一个 doc，_id 为幂等键）
  *
  * 优先级：MongoDB（管理页面修改） > env / schedules.js 默认值。
@@ -18,7 +17,6 @@ const { resolveEventPhase } = require('../lib/date-context');
 const { DEFAULT_PROMPTS, validateTemplate } = require('../lib/prompt-template');
 
 const CHEER_DOC = 'cheer_settings';
-const SCHEDULER_DOC = 'scheduler_settings';
 const EVENTS_COLLECTION = 'cheer_events';
 
 const CHEER_DATA_MODES = ['season', 'career', 'emotion'];
@@ -260,53 +258,6 @@ async function resetCheerPrompts() {
   return { ...DEFAULT_PROMPTS };
 }
 
-// ── 调度配置 ──
-
-async function getSchedulerSettings() {
-  const cached = readCache(SCHEDULER_DOC);
-  if (cached) return cached;
-
-  const defaults = {
-    weekly_story_enabled: config.weeklyStoryEnabled,
-    source: 'env',
-  };
-  try {
-    const col = await collection('app_config');
-    const result = await col.doc(SCHEDULER_DOC).get();
-    const doc = result.data && result.data[0];
-    const value = doc
-      ? {
-        weekly_story_enabled:
-            typeof doc.weekly_story_enabled === 'boolean' ? doc.weekly_story_enabled : defaults.weekly_story_enabled,
-        source: 'db',
-      }
-      : defaults;
-    writeCache(SCHEDULER_DOC, value);
-    return value;
-  } catch (error) {
-    // DB 不可用时降级到默认值，但不写缓存
-    console.warn('[settings-store] getSchedulerSettings fallback to defaults:', error.message);
-    return defaults;
-  }
-}
-
-async function setSchedulerSettings(patch) {
-  const col = await collection('app_config');
-  // 先读原文档做合并，避免 set() 整文档替换抹掉未知字段
-  const existingResult = await col.doc(SCHEDULER_DOC).get();
-  const existing = (existingResult.data && existingResult.data[0]) || {};
-  const current = await getSchedulerSettings();
-  const next = Object.assign({}, existing, {
-    weekly_story_enabled:
-      typeof patch.weekly_story_enabled === 'boolean' ? patch.weekly_story_enabled : current.weekly_story_enabled,
-    updated_at: new Date().toISOString(),
-  });
-  delete next._id; // _id 由 doc().set() 自行写入，避免重复
-  await col.doc(SCHEDULER_DOC).set(next);
-  invalidateCache(SCHEDULER_DOC);
-  return Object.assign({}, next, { source: 'db' });
-}
-
 // ── 应援事件表（cheer_events 集合，每事件一个 doc）──
 
 const EVENT_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -392,8 +343,6 @@ module.exports = {
   getCheerPrompts,
   setCheerPrompts,
   resetCheerPrompts,
-  getSchedulerSettings,
-  setSchedulerSettings,
   getCheerEvents,
   getActiveEventsForDate,
   setCheerEvent,

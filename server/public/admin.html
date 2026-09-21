@@ -160,19 +160,6 @@
           </article>
           <article class="stat-card">
             <div class="stat-head">
-              <span class="stat-ico ico-orange"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></span>
-              <span class="stat-label">定时任务</span>
-            </div>
-            <div class="stat-lines">
-              <div class="stat-line"><span>同步任务</span><span id="ovTaskNext" class="mono">-</span></div>
-              <div class="stat-line"><span>周报任务</span><span id="ovTaskWeekly" class="muted-12">已废弃</span></div>
-            </div>
-            <a class="stat-link" href="#/sync">同步与周报
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 5.5l6.5 6.5-6.5 6.5"/></svg>
-            </a>
-          </article>
-          <article class="stat-card">
-            <div class="stat-head">
               <span class="stat-ico ico-orange"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg></span>
               <span class="stat-label">应援事件</span>
             </div>
@@ -427,7 +414,7 @@
         <header class="view-head">
           <div>
             <h2 id="syncTitle">数据同步</h2>
-            <p>KPL 数据采集由宿主机 systemd timer 负责，容器只读挂载数据并同步 MongoDB；此处管理同步与周报任务。</p>
+            <p>KPL 数据采集由宿主机 systemd timer 负责，容器读取采集产物同步入库；此处查看同步状态与手动触发。</p>
           </div>
         </header>
 
@@ -446,20 +433,6 @@
             </button>
           </div>
           <div id="crawlResult"></div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-head"><h3>同步任务</h3></div>
-          <div id="scheduleList"><div class="skel skel-line"></div></div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-head">
-            <h3>周报任务配置</h3>
-            <span class="badge badge-danger">已废弃</span>
-          </div>
-          <p class="panel-desc">调度配置已废弃（Phase 3），周报任务走 Vercel Cron /api/cron/daily，不再提供后台调整入口。</p>
-          <div class="field-hint muted-12">原 weekly_story 处理器已移除，Vercel 部署时通过 Vercel Cron 触发。</div>
         </section>
       </section>
     </main>

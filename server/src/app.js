@@ -102,7 +102,7 @@ async function start() {
     await db.ping();
     console.log(`[server] Database connection established (driver: ${config.dbDriver})`);
 
-    // 启动定时任务（读取 app_config 运行时配置，故为异步）；
+    // 启动容器内定时任务（cron 固定值，见 jobs/schedules.js）；
     // Vercel serverless 下关闭（SCHEDULER_ENABLED=false），任务走 /api/cron/daily
     if (config.schedulerEnabled) {
       await startScheduler();
