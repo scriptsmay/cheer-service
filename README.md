@@ -194,10 +194,10 @@ cp .env.deploy.example .env.deploy
 |------|------|:----:|------|
 | `/api/admin` | GET | - | 管理页面（内联 HTML，含登录表单） |
 | `/api/admin/ai/config` | GET | JWT | 查看当前 AI 配置（脱敏） |
-| `/api/admin/ai/config` | PUT | JWT | 更新 AI 配置（持久化到文件，立即生效） |
+| `/api/admin/ai/config` | PUT | JWT | 更新 AI 配置（postgres 模式持久化到 `app_config`，mongo 回退写文件；立即生效） |
 | `/api/admin/ai/test` | POST | JWT | 测试 AI 连通性 |
 | `/api/admin/sync/status` | GET | JWT | 查询同步状态和选手数据概览 |
-| `/api/admin/sync/crawl` | POST | JWT | 手动触发 KPL 数据同步（变更检测+入库） |
+| `/api/admin/sync/crawl` | POST | JWT | 手动触发 KPL 数据同步（先应答后执行；同步进行中重复提交回 409） |
 | `/api/cron/daily` | GET | `Bearer CRON_SECRET` | Vercel Cron 入口（cleanup_ai + kpl_crawl 合并执行） |
 
 鉴权方式：
@@ -230,7 +230,7 @@ kpl-data-daily（宿主机 /root/kpl-data-daily，systemd timer）
     │
     ▼ 容器内 kpl_crawl 任务（每天 09:00，syncKplCrawl 编排）
     │
-    ├── mtime 检测变更（对比 overview/schedule 文件与 /app/data/.kpl_last_sync）
+    ├── 变更检测（github 条件请求 ETag / local 文件 mtime；状态戳存 app_config/kpl_sync_state）
     ├── syncData       # 读取本地 JSON → MongoDB season_summaries
     └── syncSchedule   # 读取本地 JSON → MongoDB match_schedules
 ```
@@ -289,7 +289,6 @@ npm test
 | `KPL_GITHUB_RAW_BASE` | github 模式 raw 基址（默认指向采集产物仓，末斜杠会被剥离） |
 | `KPL_DATA_DIR` | kpl-data-daily 本地数据目录（仅 `KPL_SOURCE=local` 使用，容器内只读挂载） |
 | `CRAWL_ENABLED` | KPL 数据链路开关（`false` 暂停同步与实时赛程任务） |
-| `KPL_SYNC_STATE_FILE` | 同步状态戳路径（默认 `/app/data/.kpl_last_sync`，须在容器可写卷内） |
 | `AI_USER_DAILY_LIMIT` | AI 应援用户日限额（默认 100） |
 | `AI_IP_DAILY_LIMIT` | AI 应援 IP 日限额（默认 30） |
 | `AI_GLOBAL_DAILY_LIMIT` | AI 应援全局日限额（默认 500） |

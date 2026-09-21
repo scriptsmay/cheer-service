@@ -692,7 +692,7 @@ async function triggerCrawl() {
   const btn = document.getElementById('crawlBtn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>提交中…';
-  el.innerHTML = '<div class="result info">同步任务已提交，异步执行中，结果见容器日志…</div>';
+  el.innerHTML = '<div class="result info">同步任务已在后台执行（全量约需数分钟），稍后刷新查看状态…</div>';
   try {
     const r = await api('POST', '/api/admin/sync/crawl');
     if (!r) { btn.disabled = false; btn.innerHTML = '手动同步'; return; }

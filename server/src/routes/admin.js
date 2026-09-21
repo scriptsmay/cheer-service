@@ -34,9 +34,14 @@ const {
 const { collection } = require('../db');
 const config = require('../config/env');
 
-// kpl-data-daily 手动同步（读取宿主机挂载数据入库），编排逻辑在 syncKplCrawl 内
+// kpl-data-daily 手动同步（读取采集产物入库），编排逻辑在 syncKplCrawl 内
 let syncKplCrawl;
-try { syncKplCrawl = require('../jobs/syncKplCrawl').syncKplCrawl; } catch (_) {}
+let isSyncRunning = () => false;
+try {
+  ({ syncKplCrawl, isSyncRunning } = require('../jobs/syncKplCrawl'));
+} catch (e) {
+  console.error('[admin] syncKplCrawl 模块加载失败:', e.message);
+}
 // 调度配置已移除（Phase 3），定时任务走 Vercel Cron
 
 // ── 鉴权守卫：硬拦截（仅允许 JWT 登录用户，拒绝匿名/旧版 Token）──
@@ -121,10 +126,15 @@ router.post('/sync/crawl', requireAuth, async (req, res) => {
     return res.status(403).json({ ok: false, error: '数据同步已暂停（CRAWL_ENABLED=false）' });
   }
 
+  if (isSyncRunning()) {
+    return res.status(409).json({ ok: false, error: '同步任务正在进行中，请等待完成后刷新状态' });
+  }
+
   console.log('[admin] Manual kpl sync triggered');
 
-  // 异步执行，立即返回确认
-  res.json({ ok: true, message: '数据同步已触发，请查看容器日志' });
+  // 先应答再执行：全量同步可达数分钟，超过 serverless 单次调用时长上限，
+  // 同步结果与失败原因以日志和 GET /api/admin/sync/status 的快照为准。
+  res.json({ ok: true, message: '数据同步已在后台执行，稍后刷新本页查看同步状态' });
 
   try {
     const result = await syncKplCrawl();

@@ -18,8 +18,12 @@ const { getRequestId, getErrorMessage } = require('../utils/helpers');
 
 let cleanupAiReports;
 let syncKplCrawl;
-try { cleanupAiReports = require('../jobs/cleanupAiReports').cleanupAiReports; } catch (_) {}
-try { syncKplCrawl = require('../jobs/syncKplCrawl').syncKplCrawl; } catch (_) {}
+try { cleanupAiReports = require('../jobs/cleanupAiReports').cleanupAiReports; } catch (e) {
+  console.error('[cron] cleanupAiReports 模块加载失败:', e.message);
+}
+try { syncKplCrawl = require('../jobs/syncKplCrawl').syncKplCrawl; } catch (e) {
+  console.error('[cron] syncKplCrawl 模块加载失败:', e.message);
+}
 
 const router = express.Router();
 
