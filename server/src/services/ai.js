@@ -21,7 +21,7 @@ const config = require('../config/env');
  * @returns {Promise<{text: string, usage: Object}>}
  */
 async function generateText({ messages, temperature = 0.85, jsonMode = false, frequency_penalty, presence_penalty }) {
-  const { baseUrl, apiKey, model, thinkingBudget } = getEffectiveConfig();
+  const { baseUrl, apiKey, model, thinkingBudget } = await getEffectiveConfig();
 
   const body = {
     model,
@@ -80,7 +80,7 @@ async function generateText({ messages, temperature = 0.85, jsonMode = false, fr
  * @returns {Promise<{text: string, usage: Object, reasoning: string}>}
  */
 async function generateTextStream({ messages, temperature = 0.85, jsonMode = false, frequency_penalty, presence_penalty, onChunk }) {
-  const { baseUrl, apiKey, model, thinkingBudget } = getEffectiveConfig();
+  const { baseUrl, apiKey, model, thinkingBudget } = await getEffectiveConfig();
 
   const body = {
     model,

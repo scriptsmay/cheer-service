@@ -213,7 +213,7 @@ function readCappedBody(res) {
  */
 async function fetchAvailableModels(opts = {}) {
   const { baseUrl, apiKey } = opts || {};
-  const cfg = aiConfig.getEffectiveConfig();
+  const cfg = await aiConfig.getEffectiveConfig();
 
   const resolvedBaseUrl = baseUrl || cfg.baseUrl;
   // 是否使用了「不同的端点」：表单显式填了且与生效 Base URL 不一致

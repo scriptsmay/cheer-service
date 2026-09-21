@@ -145,8 +145,8 @@ router.get('/', (req, res) => {
 });
 
 // ── 查看 AI 配置（需登录）──
-router.get('/ai/config', requireAuth, (req, res) => {
-  const cfg = getEffectiveConfig();
+router.get('/ai/config', requireAuth, async (req, res) => {
+  const cfg = await getEffectiveConfig();
   res.json({
     base_url: cfg.baseUrl,
     model: cfg.model,
@@ -159,15 +159,15 @@ router.get('/ai/config', requireAuth, (req, res) => {
 });
 
 // ── 更新 AI 配置（需登录）──
-router.put('/ai/config', requireAuth, (req, res) => {
+router.put('/ai/config', requireAuth, async (req, res) => {
   const { baseUrl, apiKey, model } = req.body;
   if (!baseUrl && !apiKey && !model) {
     return res.status(400).json({ ok: false, error: '至少提供一个字段: baseUrl, apiKey, model' });
   }
 
-  const current = getEffectiveConfig();
+  const current = await getEffectiveConfig();
   try {
-    saveConfig({
+    await saveConfig({
       baseUrl: baseUrl || current.baseUrl,
       apiKey:  apiKey  || current.apiKey,
       model:   model   || current.model,
@@ -197,7 +197,7 @@ router.post('/ai/models', requireAuth, async (req, res) => {
 // ── 测试 AI 连通性（需登录）──
 router.post('/ai/test', requireAuth, async (req, res) => {
   const { baseUrl, apiKey, model } = req.body;
-  const cfg = getEffectiveConfig();
+  const cfg = await getEffectiveConfig();
 
   const aiBaseUrl = (baseUrl || cfg.baseUrl).replace(/\/+$/, '');
   const aiApiKey = apiKey || cfg.apiKey;
