@@ -22,7 +22,7 @@ const config = {
   // AI (OpenAI 兼容)
   aiBaseUrl: process.env.AI_BASE_URL || 'https://api.deepseek.com/v1',
   aiApiKey: process.env.AI_API_KEY || '',
-  aiModel: process.env.AI_MODEL || 'deepseek-chat',
+  aiModel: process.env.AI_MODEL || 'deepseek-v4-flash',
   aiTimeoutMs: parseInt(process.env.AI_TIMEOUT_MS || '180000', 10),
   // 流式生成空闲超时：每收到一次数据就重置，只约束「无数据间隔」，
   // 不限制总时长（思考型模型推理可远超 3 分钟，靠 15s 心跳保活 SSE 链路）
