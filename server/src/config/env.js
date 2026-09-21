@@ -85,6 +85,14 @@ const config = {
 
   // 服务端口
   port: parseInt(process.env.PORT || '3000', 10),
+
+  // 调度器开关（v1.4.0 Phase 3：Vercel serverless 置 false，定时任务走 /api/cron/daily）
+  schedulerEnabled: process.env.SCHEDULER_ENABLED !== 'false',
+  // Vercel Cron 鉴权（配置后 cron 请求须带 Authorization: Bearer <CRON_SECRET>）
+  cronSecret: process.env.CRON_SECRET || '',
+  // Upstash Redis（可选：serverless 多实例共享 IP 限流计数；未配置回退进程内 Map）
+  upstashRestUrl: process.env.UPSTASH_REDIS_REST_URL || '',
+  upstashRestToken: process.env.UPSTASH_REDIS_REST_TOKEN || '',
 };
 
 module.exports = config;

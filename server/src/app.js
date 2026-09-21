@@ -18,13 +18,13 @@ const authRoute = require('./routes/auth');
 const overviewRoute = require('./routes/overview');
 const liveRoute = require('./routes/live');
 const scheduleRoute = require('./routes/schedule');
-const storyRoute = require('./routes/story');
 const heroesRoute = require('./routes/heroes');
 const configRoute = require('./routes/config');
 const cheerRoute = require('./routes/cheer');
 const askRoute = require('./routes/ask');
 const checkinRoute = require('./routes/checkin');
 const adminRoute = require('./routes/admin');
+const cronRoute = require('./routes/cron');
 
 // 定时任务
 const { startScheduler } = require('./jobs/scheduler');
@@ -47,7 +47,6 @@ app.use('/api/config', configRoute);
 app.use('/api/overview', overviewRoute);
 app.use('/api/live', liveRoute);
 app.use('/api/schedule', scheduleRoute);
-app.use('/api/story', storyRoute);
 app.use('/api/heroes', heroesRoute);
 // 需鉴权接口（内容安全过滤）
 app.use('/api/cheer', contentFilterMiddleware, cheerRoute);
@@ -55,6 +54,7 @@ app.use('/api/ask', contentFilterMiddleware, askRoute);
 app.use('/api/checkins', checkinRoute);
 // 运维接口
 app.use('/api/admin', adminRoute);
+app.use('/api/cron', cronRoute);
 
 // ── 静态资源（管理页面前端：自包含 admin.html；/admin-static 兼容保留）──
 // 与后端 API 分离，便于独立维护；HTML 由 GET /api/admin 以 sendFile 返回
@@ -102,8 +102,13 @@ async function start() {
     await db.ping();
     console.log(`[server] Database connection established (driver: ${config.dbDriver})`);
 
-    // 启动定时任务（读取 app_config 运行时配置，故为异步）
-    await startScheduler();
+    // 启动定时任务（读取 app_config 运行时配置，故为异步）；
+    // Vercel serverless 下关闭（SCHEDULER_ENABLED=false），任务走 /api/cron/daily
+    if (config.schedulerEnabled) {
+      await startScheduler();
+    } else {
+      console.log('[server] scheduler disabled (SCHEDULER_ENABLED=false)');
+    }
 
     // 启动 HTTP 服务
     app.listen(config.port, () => {
@@ -115,4 +120,9 @@ async function start() {
   }
 }
 
-start();
+// 常驻运行（Docker/本地）才自启动；被 Vercel Function 引入时只导出 app 由平台调度
+if (require.main === module) {
+  start();
+}
+
+module.exports = { app, start };

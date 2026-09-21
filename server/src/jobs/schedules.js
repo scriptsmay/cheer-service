@@ -19,20 +19,6 @@ const SCHEDULES = [
     category: 'collection',
   },
   {
-    key: 'kpl_live',
-    name: '赛程实时同步',
-    cron: '*/10 * * * *',
-    description: '每 10 分钟同步一次实时赛程状态',
-    category: 'collection',
-  },
-  {
-    key: 'weekly_story',
-    name: '周报生成',
-    cron: '0 5 * * 1',
-    description: '每周一 05:00 生成选手周报',
-    category: 'job',
-  },
-  {
     key: 'cleanup_ai',
     name: 'AI 报告清理',
     cron: '20 3 * * *',
