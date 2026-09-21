@@ -262,12 +262,19 @@ npm test
 
 ## 环境变量
 
-参见 `.env.example`，关键配置：
+参见 `.env.example`（Vercel 部署）/ `.env.local.example`（本地部署），关键配置：
 
 | 变量 | 说明 |
 |------|------|
+| `DB_DRIVER` | 数据后端：`mongo`（默认）\| `postgres` |
 | `MONGO_URI` | MongoDB 连接字符串（需包含 `replicaSet=rs0`） |
 | `MONGO_PASSWORD` | MongoDB root 密码（Docker 部署用） |
+| `POSTGRES_URI` | Postgres 连接串（`DB_DRIVER=postgres` 时必填）。用 session 池化器 5432，不加 `?pgbouncer=true`、不写 `sslmode`（TLS 由代码统一控制） |
+| `PG_SCHEMA` | Postgres schema（默认 `cheer`） |
+| `PG_POOL_MAX` | 单实例连接池上限（默认 5；serverless 总连接数 ≈ 并发实例数 × 该值） |
+| `SCHEDULER_ENABLED` | 进程内调度器开关，`false` 时定时任务改由 `GET /api/cron/daily` 触发（serverless 部署必填 false） |
+| `CRON_SECRET` | cron 鉴权密钥，配置后请求须带 `Authorization: Bearer <CRON_SECRET>`；未配置时生产环境拒绝触发 |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | 跨实例共享限流计数（可选，未配置回退进程内 Map） |
 | `CHEER_SERVICE_IMAGE` | api 服务使用的镜像（默认 `docker.cnb.cool/scriptsmay/cheer-service:latest`） |
 | `JWT_SECRET` | JWT 签名密钥 |
 | `AI_BASE_URL` | OpenAI 兼容 API 地址（默认 DeepSeek） |
@@ -279,10 +286,12 @@ npm test
 | `ALLOW_LOCALHOST` | 是否允许 localhost CORS（开发模式） |
 | `BLOCKED_TERMS` | 内容安全屏蔽词（逗号分隔） |
 | `IP_HASH_SALT` | IP 哈希盐值（限流用） |
-| `KPL_DATA_DIR` | kpl-data-daily 本地数据目录（容器内路径，只读挂载） |
+| `KPL_SOURCE` | KPL 采集产物数据源：`local`（读挂载目录）\| `github`（读 GitHub raw，默认） |
+| `KPL_GITHUB_RAW_BASE` | github 模式 raw 基址（默认指向采集产物仓，末斜杠会被剥离） |
+| `KPL_DATA_DIR` | kpl-data-daily 本地数据目录（仅 `KPL_SOURCE=local` 使用，容器内只读挂载） |
 | `CRAWL_ENABLED` | KPL 数据链路开关（`false` 暂停同步与实时赛程任务） |
 | `KPL_SYNC_STATE_FILE` | 同步状态戳路径（默认 `/app/data/.kpl_last_sync`，须在容器可写卷内） |
-| `AI_USER_DAILY_LIMIT` | AI 应援用户日限额（默认 10） |
+| `AI_USER_DAILY_LIMIT` | AI 应援用户日限额（默认 100） |
 | `AI_IP_DAILY_LIMIT` | AI 应援 IP 日限额（默认 30） |
 | `AI_GLOBAL_DAILY_LIMIT` | AI 应援全局日限额（默认 500） |
 
