@@ -721,39 +721,13 @@ async function triggerCrawl() {
   btn.innerHTML = '手动同步';
 }
 
+// 调度配置已废弃（Phase 3），周报任务走 Vercel Cron /api/cron/daily
 async function refreshSchedulerConfig() {
-  try {
-    const r = await api('GET', '/api/admin/scheduler/config');
-    if (!r) return;
-    const d = await r.json();
-    if (!d.ok) return;
-    const badge = document.getElementById('schedulerSourceBadge');
-    badge.textContent = d.source === 'db' ? '已自定义' : '默认值';
-    badge.className = 'badge ' + (d.source === 'db' ? 'badge-file' : 'badge-env');
-    document.getElementById('weeklyStoryEnabled').checked = !!d.weekly_story_enabled;
-    const crawl = Array.isArray(d.schedules) ? d.schedules.find((s) => s.key === 'kpl_crawl') : null;
-    const nextTxt = crawl && crawl.next_run ? '同步任务下次执行：' + formatTimeCST(crawl.next_run) : '';
-    document.getElementById('schedulerNextRun').textContent = nextTxt;
-    document.getElementById('ovTaskNext').textContent = crawl && crawl.next_run ? formatTimeCST(crawl.next_run) : '-';
-    const wk = document.getElementById('ovTaskWeekly');
-    wk.textContent = d.weekly_story_enabled ? '已开启' : '已关闭';
-    wk.className = d.weekly_story_enabled ? 'ok-text' : 'muted-12';
-  } catch (e) { /* 静默 */ }
+  document.getElementById('ovTaskWeekly').textContent = '已废弃';
+  document.getElementById('ovTaskWeekly').className = 'muted-12';
 }
 async function saveSchedulerConfig() {
-  const body = { weekly_story_enabled: document.getElementById('weeklyStoryEnabled').checked };
-  const btn = document.getElementById('saveSchedulerBtn');
-  btn.disabled = true;
-  const r = await api('PUT', '/api/admin/scheduler/config', body);
-  btn.disabled = false;
-  if (!r) return;
-  const d = await r.json();
-  if (d.ok) {
-    toast(escapeHtml(d.message || '周报配置已保存'));
-    refreshSyncSection();
-  } else {
-    toast(escapeHtml(d.error || '保存失败'), 'error');
-  }
+  toast('调度配置已废弃，周报任务走 Vercel Cron', 'error');
 }
 
 /* ════════════════════════════════════════════════
@@ -765,7 +739,7 @@ async function refreshOverview() {
   ovRefreshing = true;
   const btn = document.getElementById('ovRefresh');
   btn.disabled = true;
-  await Promise.allSettled([refresh(), refreshCheerMode(), refreshEvents(), refreshSyncStatus(), refreshSchedulerConfig()]);
+  await Promise.allSettled([refresh(), refreshCheerMode(), refreshEvents(), refreshSyncStatus()]);
   btn.disabled = false;
   ovRefreshing = false;
 }
@@ -823,8 +797,6 @@ function bindEvents() {
 
   document.getElementById('crawlBtn').addEventListener('click', triggerCrawl);
   document.getElementById('refreshBtn').addEventListener('click', refreshSyncStatus);
-  document.getElementById('saveSchedulerBtn').addEventListener('click', saveSchedulerConfig);
-  document.getElementById('reloadSchedulerBtn').addEventListener('click', refreshSchedulerConfig);
 
   document.addEventListener('click', (e) => {
     const box = document.getElementById('modelPicker');

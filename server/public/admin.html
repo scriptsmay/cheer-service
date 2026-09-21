@@ -165,7 +165,7 @@
             </div>
             <div class="stat-lines">
               <div class="stat-line"><span>同步任务</span><span id="ovTaskNext" class="mono">-</span></div>
-              <div class="stat-line"><span>周报任务</span><span id="ovTaskWeekly">-</span></div>
+              <div class="stat-line"><span>周报任务</span><span id="ovTaskWeekly" class="muted-12">已废弃</span></div>
             </div>
             <a class="stat-link" href="#/sync">同步与周报
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 5.5l6.5 6.5-6.5 6.5"/></svg>
@@ -456,24 +456,10 @@
         <section class="panel">
           <div class="panel-head">
             <h3>周报任务配置</h3>
-            <span id="schedulerSourceBadge" class="badge badge-env"></span>
+            <span class="badge badge-danger">已废弃</span>
           </div>
-          <p class="panel-desc">采集/赛程节奏由宿主机 systemd timer 管理（每日 03:00 全量 / 每 6 小时赛程），不在后台调整。</p>
-          <label class="check-row">
-            <input id="weeklyStoryEnabled" type="checkbox" />
-            <span class="check-txt">启用周报任务<em>每周一 05:00 生成；缺赛期缺少周环比数据，建议关闭</em></span>
-          </label>
-          <div class="btn-row">
-            <button class="btn btn-primary" id="saveSchedulerBtn" type="button">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 3.5h10.6l4.4 4.4v12.6h-15V3.5z"/><path d="M8.5 3.5V9h7V3.5"/><path d="M8 20.5v-6h8v6"/></svg>
-              保存配置
-            </button>
-            <button class="btn btn-ghost" id="reloadSchedulerBtn" type="button">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
-              重新加载
-            </button>
-          </div>
-          <div id="schedulerNextRun" class="field-hint ok-text"></div>
+          <p class="panel-desc">调度配置已废弃（Phase 3），周报任务走 Vercel Cron /api/cron/daily，不再提供后台调整入口。</p>
+          <div class="field-hint muted-12">原 weekly_story 处理器已移除，Vercel 部署时通过 Vercel Cron 触发。</div>
         </section>
       </section>
     </main>

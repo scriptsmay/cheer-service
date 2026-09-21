@@ -11,6 +11,7 @@
  *
  * KPL 数据链路：采集在宿主机 systemd timer（kpl-data-daily 仓），容器只读挂载；
  * 同步状态见 GET /api/admin/sync/status，手动同步见 POST /api/admin/sync/crawl。
+ * 调度配置已废弃（Phase 3），定时任务走 Vercel Cron /api/cron/daily。
  */
 
 const express = require('express');
@@ -25,8 +26,7 @@ const {
   getCheerPrompts,
   setCheerPrompts,
   resetCheerPrompts,
-  getSchedulerSettings,
-  setSchedulerSettings,
+
   getCheerEvents,
   setCheerEvent,
   deleteCheerEvent,
@@ -37,7 +37,7 @@ const config = require('../config/env');
 // kpl-data-daily 手动同步（读取宿主机挂载数据入库），编排逻辑在 syncKplCrawl 内
 let syncKplCrawl;
 try { syncKplCrawl = require('../jobs/syncKplCrawl').syncKplCrawl; } catch (_) {}
-const { getScheduleList } = require('../jobs/schedules');
+// 调度配置已移除（Phase 3），定时任务走 Vercel Cron
 
 // ── 鉴权守卫：硬拦截（仅允许 JWT 登录用户，拒绝匿名/旧版 Token）──
 function requireAuth(req, res, next) {
@@ -389,43 +389,6 @@ router.delete('/cheer/prompts', requireAuth, async (req, res) => {
     const defaults = await resetCheerPrompts();
     res.json({ ok: true, prompts: defaults, version: 0, message: '已恢复代码默认模板' });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// GET /api/admin/scheduler/config — 查看周报开关与任务列表（cron 为固定值，仅展示）
-router.get('/scheduler/config', requireAuth, async (req, res) => {
-  try {
-    const settings = await getSchedulerSettings();
-    res.json({
-      ok: true,
-      weekly_story_enabled: settings.weekly_story_enabled,
-      source: settings.source,
-      schedules: getScheduleList(true),
-    });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// PUT /api/admin/scheduler/config — 更新周报开关
-// （KPL 采集/赛程节奏由宿主机 systemd timer 管理，容器内 cron 不再提供后台调整入口）
-router.put('/scheduler/config', requireAuth, async (req, res) => {
-  const body = req.body || {};
-  if (typeof body.weekly_story_enabled !== 'boolean') {
-    return res.status(400).json({ ok: false, error: 'weekly_story_enabled 必须是布尔值' });
-  }
-
-  try {
-    const saved = await setSchedulerSettings({ weekly_story_enabled: body.weekly_story_enabled });
-    res.json({
-      ok: true,
-      weekly_story_enabled: saved.weekly_story_enabled,
-      source: saved.source,
-      message: '已保存并立即生效',
-    });
-  } catch (err) {
-    console.error('[admin] scheduler config update failed:', err.message);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
