@@ -5,7 +5,7 @@
  * 每 10 分钟，仅在比赛窗口内增量同步 KPL 赛程
  */
 
-const { collection } = require('../db/mongo');
+const { collection } = require('../db');
 const { computeWindowStatus, fetchKplScheduleList, convertKplMatches, mergeScheduleMatches, recordSyncSnapshot } = require('../lib/schedule-merge');
 
 async function syncScheduleLive() {

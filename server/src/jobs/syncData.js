@@ -7,7 +7,7 @@
  * 数据来源由 kpl-source 抽象：local（宿主机挂载目录）或 github（GitHub raw）。
  */
 
-const { collection } = require('../db/mongo');
+const { collection } = require('../db');
 const crypto = require('crypto');
 const kplSource = require('../lib/kpl-source');
 

@@ -31,6 +31,13 @@ async function close() {
   }
 }
 
+/** 健康检查：ping（app.js /api/health 与启动链用；与 postgres.js ping() 同形） */
+async function ping() {
+  const db = await getDb();
+  const result = await db.admin().command({ ping: 1 });
+  return result.ok === 1;
+}
+
 /**
  * 封装 collection，提供与 TCB SDK 类似的链式 API
  * TCB 特有差异点已在封装层统一处理
@@ -213,4 +220,4 @@ const command = {
   eq: (val) => ({ $eq: val }),
 };
 
-module.exports = { getDb, close, collection, runTransaction, isTransactionConflict, command };
+module.exports = { getDb, close, ping, collection, runTransaction, isTransactionConflict, command };

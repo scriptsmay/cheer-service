@@ -7,7 +7,7 @@
 
 const express = require('express');
 const crypto = require('crypto');
-const { collection, runTransaction } = require('../db/mongo');
+const { collection, runTransaction } = require('../db');
 const { generateText } = require('../services/ai');
 const { resolveIdentity } = require('../services/identity');
 const { successResponse, errorResponse } = require('../services/response');

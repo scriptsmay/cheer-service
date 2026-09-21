@@ -6,9 +6,18 @@
  */
 
 const config = {
+  // 数据库后端选择（v1.3.0 迁移 Phase 2）：mongo（默认，向后兼容）| postgres（Supabase）
+  // mongo 链路全程保留为秒级回退通道
+  dbDriver: (process.env.DB_DRIVER || 'mongo').toLowerCase(),
+
   // MongoDB
   mongoUri: process.env.MONGO_URI || 'mongodb://localhost:27017/wuyan',
   mongoDbName: 'wuyan',
+
+  // Postgres（Supabase，dbDriver=postgres 时生效）
+  pgUri: process.env.POSTGRES_URI || '',
+  pgPoolMax: parseInt(process.env.PG_POOL_MAX || '5', 10),
+  pgSchema: process.env.PG_SCHEMA || 'cheer',
 
   // AI (OpenAI 兼容)
   aiBaseUrl: process.env.AI_BASE_URL || 'https://api.deepseek.com/v1',

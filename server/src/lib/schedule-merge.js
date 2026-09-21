@@ -5,7 +5,7 @@
  * 由 sync-schedule、sync-schedule-live、get-schedule 共用
  */
 
-const { collection, runTransaction, isTransactionConflict } = require('../db/mongo');
+const { collection, runTransaction, isTransactionConflict } = require('../db');
 
 // ---- 窗口计算 ----
 

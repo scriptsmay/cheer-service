@@ -5,7 +5,7 @@
  * 每周一 05:00，AI 生成周故事卡
  */
 
-const { collection } = require('../db/mongo');
+const { collection } = require('../db');
 const { generateText } = require('../services/ai');
 
 async function weeklyStory() {

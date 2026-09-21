@@ -6,7 +6,7 @@
  */
 
 const express = require('express');
-const { collection, runTransaction } = require('../db/mongo');
+const { collection, runTransaction } = require('../db');
 const { resolveIdentity } = require('../services/identity');
 const { successResponse, errorResponse } = require('../services/response');
 const { getRequestId, getClientIp, shanghaiDate, normalizeClientId, isValidClientId, hashValue } = require('../utils/helpers');

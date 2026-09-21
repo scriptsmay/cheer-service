@@ -31,7 +31,7 @@ const {
   setCheerEvent,
   deleteCheerEvent,
 } = require('../services/settings-store');
-const { collection } = require('../db/mongo');
+const { collection } = require('../db');
 const config = require('../config/env');
 
 // kpl-data-daily 手动同步（读取宿主机挂载数据入库），编排逻辑在 syncKplCrawl 内

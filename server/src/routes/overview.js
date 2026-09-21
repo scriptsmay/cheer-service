@@ -6,7 +6,7 @@
  */
 
 const express = require('express');
-const { collection } = require('../db/mongo');
+const { collection } = require('../db');
 const { successResponse, errorResponse } = require('../services/response');
 const { getRequestId, isObject } = require('../utils/helpers');
 

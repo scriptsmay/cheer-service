@@ -12,7 +12,7 @@
  * 修改无需重启容器，立即生效。
  */
 
-const { collection } = require('../db/mongo');
+const { collection } = require('../db');
 const config = require('../config/env');
 const { resolveEventPhase } = require('../lib/date-context');
 const { DEFAULT_PROMPTS, validateTemplate } = require('../lib/prompt-template');

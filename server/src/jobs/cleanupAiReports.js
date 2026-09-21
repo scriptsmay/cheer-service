@@ -5,7 +5,7 @@
  * 每日 03:20，清理过期 AI 报告
  */
 
-const { collection, command } = require('../db/mongo');
+const { collection, command } = require('../db');
 
 async function cleanupAiReports() {
   const now = new Date().toISOString();

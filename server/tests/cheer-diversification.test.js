@@ -550,7 +550,7 @@ describe('settings-store — 事件表与 cheer 设置（mock DB）', () => {
   beforeEach(() => {
     memDb = new Map();
     Module._load = function (request, parent, isMain) {
-      if (request === '../db/mongo') {
+      if (request === '../db/mongo' || request === '../db') {
         return {
           collection: async (name) => {
             if (!memDb.has(name)) memDb.set(name, new Map());

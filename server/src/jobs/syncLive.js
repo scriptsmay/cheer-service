@@ -16,7 +16,7 @@
  * ② 在 scheduler.js 中重新注册本 job。
  */
 
-const { collection } = require('../db/mongo');
+const { collection } = require('../db');
 const config = require('../config/env');
 
 const API_BASE = `${config.dataBaseUrl}/api/streams`;

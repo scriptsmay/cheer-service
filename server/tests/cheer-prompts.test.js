@@ -93,7 +93,7 @@ describe('settings-store — prompts 存取（mock DB）', () => {
   beforeEach(() => {
     memDb = new Map();
     Module._load = function (request, parent, isMain) {
-      if (request === '../db/mongo') {
+      if (request === '../db/mongo' || request === '../db') {
         return {
           collection: async (name) => {
             if (!memDb.has(name)) memDb.set(name, new Map());
@@ -339,7 +339,7 @@ describe('getRecentOpenings — 近 14 天指纹查询（mock DB）', () => {
   beforeEach(() => {
     memDb = new Map();
     Module._load = function (request, parent, isMain) {
-      if (request === '../db/mongo') {
+      if (request === '../db/mongo' || request === '../db') {
         return {
           command: { gte: (val) => ({ $gte: val }) },
           collection: async (name) => {

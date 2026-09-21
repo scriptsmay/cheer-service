@@ -30,7 +30,7 @@ const adminRoute = require('./routes/admin');
 const { startScheduler } = require('./jobs/scheduler');
 
 // ── 初始化 MongoDB 连接 ──
-const { getDb } = require('./db/mongo');
+const db = require('./db');
 
 const app = express();
 
@@ -64,20 +64,20 @@ app.use('/admin-static', express.static(path.join(__dirname, '..', 'public')));
 const pkgInfo = require('../../package.json');
 app.get('/api/health', async (req, res) => {
   try {
-    const db = await getDb();
-    const adminDb = db.admin();
-    const result = await adminDb.command({ ping: 1 });
+    const ok = await db.ping();
     res.json({
       status: 'ok',
       version: pkgInfo.version,
-      mongo: result.ok === 1 ? 'connected' : 'error',
+      db: ok ? 'connected' : 'error',
+      driver: config.dbDriver,
       timestamp: new Date().toISOString()
     });
   } catch (e) {
     res.status(503).json({
       status: 'error',
       version: pkgInfo.version,
-      mongo: 'disconnected',
+      db: 'disconnected',
+      driver: config.dbDriver,
       error: e.message,
       timestamp: new Date().toISOString()
     });
@@ -98,9 +98,9 @@ app.use((err, req, res, _next) => {
 // ── 启动服务 ──
 async function start() {
   try {
-    // 确保 MongoDB 连接就绪
-    await getDb();
-    console.log('[server] MongoDB connection established');
+    // 确保数据库连接就绪（后端由 DB_DRIVER 决定）
+    await db.ping();
+    console.log(`[server] Database connection established (driver: ${config.dbDriver})`);
 
     // 启动定时任务（读取 app_config 运行时配置，故为异步）
     await startScheduler();
