@@ -44,7 +44,8 @@ function normalizeDoc(doc) {
 }
 
 async function migrateCollection(name) {
-  const { data } = await mongo.collection(name).where({}).get();
+  const mongoCol = await mongo.collection(name);
+  const { data } = await mongoCol.where({}).get();
   const pgCol = pg.collection(name);
   let imported = 0;
   for (const raw of data) {
