@@ -409,7 +409,7 @@ router.post('/stream', async (req, res) => {
       const parsed = parseGeneratedText(collectedText);
       const validation = inspectGeneratedOutput(parsed, source, {
         humanize: !ctx || ctx.humanizeEnabled !== false,
-        anchorNumbers: collectAnchorNumbers(ctx),
+        anchorNumbers: collectAnchorNumbers(ctx, source),
         line_count: promptCfg.line_count,
         recentOpenings: Array.isArray(recentOpenings) ? recentOpenings.map((r) => r.opening) : [],
       });
@@ -516,7 +516,8 @@ router.post('/stream', async (req, res) => {
       res.status(status).json({ error: code, message: getStreamErrorMessage(code), request_id: requestId });
     }
   } finally {
-    observer.finalize();
+    const summary = observer.finalize();
+    await finalizeGenerationAttempt(summary);
     routeDeadline.dispose();
     isFinished = true;
     if (keepaliveTimer) clearInterval(keepaliveTimer);
@@ -571,7 +572,7 @@ async function generateValidatedOutput({ mood, text, source, requestId, mode, ct
     for (const result of candidateResults) {
       const validation = inspectGeneratedOutput(parseGeneratedText(result && result.text), source, {
         humanize: !ctx || ctx.humanizeEnabled !== false,
-        anchorNumbers: collectAnchorNumbers(ctx),
+        anchorNumbers: collectAnchorNumbers(ctx, source),
         line_count: promptCfg.line_count,
         recentOpenings: recentOpeningSet,
       });
@@ -832,20 +833,29 @@ function inspectGeneratedOutput(output, source, opts = {}) {
   return { ok: true, output: safeOutput };
 }
 
-/**
- * 收集今日背景锚点（节气/节日/赛事）注入 prompt 的数字 + 事件剩余天数，
- * 供 ungrounded_number 校验纳入白名单。
- */
-function collectAnchorNumbers(ctx) {
+function collectAnchorNumbers(ctx, source) {
   const numbers = new Set();
-  if (ctx && ctx.eventPhase) numbers.add(String(ctx.eventPhase.daysUntil));
-  if (ctx && ctx.dateContext && Array.isArray(ctx.dateContext.anchors)) {
-    for (const anchor of ctx.dateContext.anchors) {
-      for (const number of String(anchor.text || '').match(/\d+(?:\.\d+)?%?/gu) || []) {
-        numbers.add(number);
-      }
+  const collect = (value) => {
+    if (value === null || value === undefined) return;
+    if (typeof value === 'number') {
+      if (Number.isFinite(value)) numbers.add(String(value));
+      return;
     }
-  }
+    if (typeof value === 'string') {
+      for (const number of value.match(/\d+(?:\.\d+)?%?/gu) || []) numbers.add(number);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) collect(item);
+      return;
+    }
+    if (isObject(value)) {
+      for (const item of Object.values(value)) collect(item);
+    }
+  };
+  collect(ctx && ctx.dateContext);
+  collect(ctx && ctx.eventPhase);
+  collect(source && source.refs);
   return [...numbers];
 }
 
@@ -1167,6 +1177,31 @@ function createRouteDeadline(deadlineAt) {
       pendingReject = null;
     },
   };
+}
+
+async function finalizeGenerationAttempt(summary) {
+  if (!summary || !summary.request_id) return;
+  const termination = summary.termination || 'error';
+  const status = termination === 'complete'
+    ? 'complete'
+    : (['total_timeout', 'idle_timeout'].includes(termination) ? 'timeout' : 'error');
+  const attempt = {
+    request_id: summary.request_id,
+    model: summary.model || null,
+    status,
+    termination,
+    elapsed_ms: summary.elapsed_ms,
+    retry_count: summary.retry_count,
+    validation_failure: summary.validation_failure || null,
+    usage: summary.usage || {},
+    created_at: new Date().toISOString(),
+  };
+  try {
+    const attempts = await collection('ai_generation_attempts');
+    await attempts.doc(attempt.request_id).set(attempt);
+  } catch (error) {
+    console.warn('[ai-cheer] generation attempt persist failed', { requestId: attempt.request_id, code: 'ATTEMPT_PERSIST_FAILED' });
+  }
 }
 
 function createStreamRequestObserver(requestId, startedAt, now = Date.now) {

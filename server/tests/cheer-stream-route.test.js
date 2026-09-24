@@ -48,7 +48,10 @@ function makeCollection(writes = [], name = '') {
       update: async (doc) => { writes.push({ name, operation: 'update', doc }); },
       remove: async () => { writes.push({ name, operation: 'remove' }); },
     }),
-    add: async () => ({ id: 'test-id' }),
+    add: async (doc) => {
+      writes.push({ name, operation: 'add', doc });
+      return { id: 'test-id' };
+    },
   };
 }
 
@@ -73,9 +76,10 @@ function loadCheerRouter() {
   return require('../src/routes/cheer');
 }
 
-async function postStream({ body = { mood: 'daily', client_id: 'client-1234' } } = {}) {
-  const cheerRouter = loadCheerRouter();
+async function postStream({ body = { mood: 'daily', client_id: 'client-1234' }, writes = [] } = {}) {
   const operations = [];
+  db.collection = async (name) => makeCollection(writes, name);
+  const cheerRouter = loadCheerRouter();
   const app = express();
   app.use(express.json());
   app.use('/api/cheer', (req, res, next) => {
@@ -156,6 +160,67 @@ afterEach(() => {
 });
 
 describe('/api/cheer/stream route', () => {
+  test('成功生成只持久化一次脱敏的终态尝试记录', async () => {
+    const writes = [];
+    resetMocks();
+    ai.generateTextStream = async (options) => {
+      const text = JSON.stringify({
+        lines: [
+          '愿你赛场发挥始终从容坚定勇敢',
+          '每次并肩前都能收获满满温暖',
+          '向前奔跑勇敢迎接崭新篇章',
+          '状态始终在线而且信心十足',
+          '一起为热爱为胜利全力以赴',
+        ],
+        emoji_caption: '一起加油',
+      });
+      options.onChunk({ type: 'content', data: text });
+      return {
+        text,
+        model: 'model-success',
+        usage: { total_tokens: 30, prompt_tokens: 10, completion_tokens: 20 },
+      };
+    };
+
+    await postStream({ writes });
+
+    const attempts = writes.filter((entry) => entry.name === 'ai_generation_attempts');
+    assert.equal(attempts.length, 1);
+    assert.deepEqual(attempts[0].doc, {
+      request_id: attempts[0].doc.request_id,
+      model: 'model-success',
+      status: 'complete',
+      termination: 'complete',
+      elapsed_ms: attempts[0].doc.elapsed_ms,
+      retry_count: 0,
+      validation_failure: null,
+      usage: { total_tokens: 30, prompt_tokens: 10, completion_tokens: 20 },
+      created_at: attempts[0].doc.created_at,
+    });
+    assert.ok(attempts[0].doc.request_id);
+    assert.ok(attempts[0].doc.created_at);
+  });
+
+  test('校验重试耗尽后持久化最终校验原因', async () => {
+    const writes = [];
+    resetMocks();
+    ai.generateTextStream = async (options) => {
+      options.onChunk({ type: 'content', data: '短' });
+      return { text: '短', model: 'model-invalid', usage: { total_tokens: 3 } };
+    };
+
+    await postStream({ writes });
+
+    const attempts = writes.filter((entry) => entry.name === 'ai_generation_attempts');
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0].doc.model, 'model-invalid');
+    assert.equal(attempts[0].doc.status, 'error');
+    assert.equal(attempts[0].doc.termination, 'output_invalid');
+    assert.equal(attempts[0].doc.retry_count, 2);
+    assert.equal(attempts[0].doc.validation_failure, 'line_count');
+    assert.deepEqual(attempts[0].doc.usage, { total_tokens: 9 });
+  });
+
   test('传入绝对 deadline，错误事件先于 end，日志不泄露错误原文', async () => {
     let deadlineAt;
     resetMocks();

@@ -30,6 +30,11 @@ const INDEXES = {
     { key: { expires_at: 1, status: 1 }, name: 'idx_expires_status' },
     { key: { module: 1, subject_id: 1 }, name: 'idx_module_subject' },
   ],
+  ai_generation_attempts: [
+    { key: { created_at: 1 }, name: 'idx_created_at' },
+    { key: { model: 1 }, name: 'idx_model' },
+    { key: { created_at: 1, model: 1 }, name: 'idx_created_at_model' },
+  ],
   ask_cache: [
     { key: { expires_at: 1 }, name: 'idx_expires_at' },
   ],

@@ -181,6 +181,21 @@
           </div>
         </header>
 
+        <section class="panel" id="aiStats" aria-labelledby="aiStatsTitle">
+          <div class="panel-head">
+            <h3 id="aiStatsTitle">模型表现（只读统计）</h3>
+            <label class="field-hint" for="aiStatsWindow">统计窗口
+              <select id="aiStatsWindow" aria-label="统计窗口">
+                <option value="24h" data-window="24h" selected>近 24 小时</option>
+                <option value="7d" data-window="7d">近 7 天</option>
+                <option value="30d" data-window="30d">近 30 天</option>
+              </select>
+            </label>
+          </div>
+          <p class="panel-desc">按 AI 生成尝试汇总，仅供模型表现参考，不会修改当前模型配置。</p>
+          <div id="aiStatsContent"><div class="skel skel-line"></div></div>
+        </section>
+
         <section class="panel">
           <div class="panel-head">
             <h3>当前配置</h3>

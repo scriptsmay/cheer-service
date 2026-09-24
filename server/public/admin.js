@@ -22,7 +22,7 @@ function renderRoute() {
   });
   ROUTES.forEach((k) => { document.getElementById('view-' + k).hidden = (k !== r); });
   document.title = ROUTE_TITLES[r] + ' · Wuyan Cheer 管理后台';
-  ({ overview: refreshOverview, ai: refresh, cheer: refreshCheerSection, sync: refreshSyncStatus }[r])();
+  ({ overview: refreshOverview, ai: refreshAISection, cheer: refreshCheerSection, sync: refreshSyncStatus }[r])();
 }
 window.addEventListener('hashchange', renderRoute);
 
@@ -105,6 +105,38 @@ function confirmDanger(title, desc) {
 /* ════════════════════════════════════════════════
  * 5. AI 服务
  * ════════════════════════════════════════════════ */
+function refreshAISection() {
+  refresh();
+  refreshAIStats();
+}
+async function refreshAIStats() {
+  const el = document.getElementById('aiStatsContent');
+  const window = document.getElementById('aiStatsWindow').value;
+  el.innerHTML = '<div class="skel skel-line"></div>';
+  try {
+    const r = await api('GET', '/api/admin/ai/stats?window=' + encodeURIComponent(window));
+    if (!r) return;
+    const d = await r.json();
+    const models = Array.isArray(d.models) ? d.models : [];
+    if (!models.length) {
+      el.innerHTML = '<div class="empty"><p class="empty-title">暂无统计样本</p><p class="empty-desc">所选时间窗口内没有 AI 生成记录</p></div>';
+      return;
+    }
+    el.innerHTML = models.map((m) => {
+      const rate = Number.isFinite(Number(m.success_rate)) ? (Number(m.success_rate) * 100).toFixed(1) + '%' : '-';
+      return '<div class="sync-block"><b>' + escapeHtml(m.model || '未知模型') + '</b>'
+        + '<div class="stat-line"><span>样本数</span><span>' + escapeHtml(String(m.samples ?? 0)) + '</span></div>'
+        + '<div class="stat-line"><span>成功率</span><span>' + escapeHtml(rate) + '</span></div>'
+        + '<div class="stat-line"><span>P50 / P95</span><span>' + escapeHtml(String(m.p50_ms ?? '-')) + ' / ' + escapeHtml(String(m.p95_ms ?? '-')) + ' ms</span></div>'
+        + '<div class="stat-line"><span>重试 / 校验失败</span><span>' + escapeHtml(String(m.retries ?? 0)) + ' / ' + escapeHtml(String(m.validation_failures ?? 0)) + '</span></div>'
+        + '<div class="stat-line"><span>Tokens</span><span>' + escapeHtml(String(m.tokens ?? 0)) + '</span></div>'
+        + '</div>';
+    }).join('');
+  } catch (e) {
+    el.innerHTML = '<div class="result error result--flush">统计加载失败：' + escapeHtml(e.message) + '</div>';
+  }
+}
+
 async function refresh() {
   try {
     const r = await api('GET', '/api/admin/ai/config');
@@ -731,6 +763,7 @@ function bindEvents() {
   document.getElementById('logoutBtnM').addEventListener('click', doLogout);
   document.getElementById('ovRefresh').addEventListener('click', refreshOverview);
 
+  document.getElementById('aiStatsWindow').addEventListener('change', refreshAIStats);
   document.getElementById('saveConfigBtn').addEventListener('click', saveConfig);
   document.getElementById('testAiBtn').addEventListener('click', testAI);
   document.getElementById('curTestAiBtn').addEventListener('click', testCurrentAI);

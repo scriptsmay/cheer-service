@@ -449,6 +449,21 @@ describe('反重复校验与提示注入', () => {
     assert.strictEqual(result.opening, '昨晚看到你的高光');
   });
 
+  test('历史开头只有精确指纹命中时才拒绝，短前缀和首字符不误杀', () => {
+    const prefix = inspectGeneratedOutput(
+      { lines: [...NATURAL_FIVE], emoji_caption: 'x' },
+      EMPTY_SOURCE,
+      { recentOpenings: ['昨晚看到'] }
+    );
+    assert.strictEqual(prefix.ok, true);
+    const firstChar = inspectGeneratedOutput(
+      { lines: [...NATURAL_FIVE], emoji_caption: 'x' },
+      EMPTY_SOURCE,
+      { recentOpenings: ['昨'] }
+    );
+    assert.strictEqual(firstChar.ok, true);
+  });
+
   test('开头不重复时正常放行（重复列表为空/无交集）', () => {
     const pass = inspectGeneratedOutput(
       { lines: [...NATURAL_FIVE], emoji_caption: 'x' },

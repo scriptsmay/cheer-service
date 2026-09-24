@@ -19,6 +19,7 @@ const COLLECTIONS = [
   'live_streams',
   'match_schedules',
   'ai_reports',
+  'ai_generation_attempts',
   'ask_cache',
   'checkins',
   'checkin_users',

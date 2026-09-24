@@ -498,19 +498,15 @@ describe('collectAnchorNumbers + ungrounded_number 白名单', () => {
     return { dateContext, eventHit: { _id: 'e1' }, eventPhase: phase };
   }
 
-  test('collectAnchorNumbers：含剩余天数与锚点文本中的数字', () => {
-    const numbers = collectAnchorNumbers(buildCtx('2026-08-29')); // T-30 preview
-    assert.ok(numbers.includes('30'), '应包含事件剩余天数 30');
-    const todayCtx = buildCtx('2026-09-28'); // T0
-    const todayNumbers = collectAnchorNumbers(todayCtx);
-    assert.ok(todayNumbers.includes('0'), '应包含剩余天数 0');
-    // 事件当天模板随机选择，锚点文本不一定含日期数字（如"就是今天！{title}"），
-    // 因此不硬编码断言"9"/"28"，改为校验锚点文本中出现的数字全部被收集
-    const anchorNumbers = todayCtx.dateContext.anchors
-      .flatMap((a) => String(a.text || '').match(/\d+(?:\.\d+)?%?/gu) || []);
-    for (const n of anchorNumbers) {
-      assert.ok(todayNumbers.includes(n), `锚点文本中的数字 ${n} 应被收集`);
-    }
+  test('collectAnchorNumbers：含 dateContext、eventPhase 与 refs 中的数字', () => {
+    const ctx = buildCtx('2026-08-29');
+    ctx.dateContext.anchors.push({ kind: 'custom', text: '9月2日 星期三' });
+    ctx.eventPhase.round = 3;
+    const numbers = collectAnchorNumbers(ctx, { refs: [{ value: '56.7%' }] });
+    assert.ok(numbers.includes('30'), '应保留事件剩余天数 30');
+    assert.ok(numbers.includes('9'), '应收集 dateContext 文本中的日期数字');
+    assert.ok(numbers.includes('3'), '应收集 eventPhase 中的数字');
+    assert.ok(numbers.includes('56.7%'), '应收集 refs 中的数字');
   });
 
   test('倒数文案带天数数字：锚点数字在白名单内放行（回归：此前必被 ungrounded_number 打回）', () => {

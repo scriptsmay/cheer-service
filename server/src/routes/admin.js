@@ -31,7 +31,7 @@ const {
   setCheerEvent,
   deleteCheerEvent,
 } = require('../services/settings-store');
-const { collection } = require('../db');
+const { collection, command } = require('../db');
 const config = require('../config/env');
 
 // kpl-data-daily 手动同步（读取采集产物入库），编排逻辑在 syncKplCrawl 内
@@ -49,6 +49,60 @@ function requireAuth(req, res, next) {
   if (req.identity && req.identity.ok && req.identity.kind === 'session') return next();
   return res.status(401).json({ code: 'UNAUTHORIZED', message: '请先登录' });
 }
+
+const AI_STATS_WINDOWS = {
+  '24h': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+};
+
+function percentile(values, percentileValue) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.max(0, Math.ceil(percentileValue * sorted.length) - 1);
+  return sorted[index];
+}
+
+router.get('/ai/stats', requireAuth, async (req, res) => {
+  const window = req.query.window || '24h';
+  const duration = AI_STATS_WINDOWS[window];
+  if (!duration) {
+    return res.status(400).json({ code: 'INVALID_ARGUMENT', message: 'window 必须是 24h、7d 或 30d' });
+  }
+
+  try {
+    const attemptsCol = await collection('ai_generation_attempts');
+    const cutoff = new Date(Date.now() - duration).toISOString();
+    const result = await attemptsCol.where({ created_at: command.gte(cutoff) }).get();
+    const grouped = new Map();
+
+    for (const attempt of result.data || []) {
+      const model = attempt.model || 'unknown';
+      if (!grouped.has(model)) grouped.set(model, []);
+      grouped.get(model).push(attempt);
+    }
+
+    const models = [...grouped.entries()].map(([model, attempts]) => {
+      const complete = attempts.filter((attempt) => attempt.status === 'complete').length;
+      const elapsed = attempts.map((attempt) => attempt.elapsed_ms).filter(Number.isFinite);
+      return {
+        model,
+        samples: attempts.length,
+        complete,
+        success_rate: attempts.length ? complete / attempts.length : 0,
+        p50_ms: percentile(elapsed, 0.5),
+        p95_ms: percentile(elapsed, 0.95),
+        retries: attempts.reduce((sum, attempt) => sum + (Number(attempt.retry_count) || 0), 0),
+        validation_failures: attempts.filter((attempt) => attempt.validation_failure).length,
+        tokens: attempts.reduce((sum, attempt) => sum + (Number(attempt.usage?.total_tokens) || 0), 0),
+      };
+    });
+
+    res.json({ window, generated_at: new Date().toISOString(), models });
+  } catch (err) {
+    res.status(500).json({ code: 500, message: '服务内部错误' });
+  }
+});
 
 // GET /api/admin/sync/status — 查询采集状态和单人数据概览 [需登录]
 router.get('/sync/status', requireAuth, async (req, res) => {
