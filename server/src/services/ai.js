@@ -10,6 +10,27 @@
 const { getEffectiveConfig } = require('./ai-config');
 const config = require('../config/env');
 
+class AIStreamTimeoutError extends Error {
+  constructor(code, message, details = {}) {
+    super(message);
+    this.name = 'AIStreamTimeoutError';
+    this.code = code;
+    Object.assign(this, details);
+  }
+}
+
+const STREAM_USAGE_FIELDS = ['total_tokens', 'prompt_tokens', 'completion_tokens'];
+
+function mergeStreamUsage(target, incoming) {
+  if (!incoming || typeof incoming !== 'object') return target;
+  for (const field of STREAM_USAGE_FIELDS) {
+    const value = Number(incoming[field]);
+    if (!Number.isFinite(value) || value < 0) continue;
+    target[field] = Math.max(target[field] || 0, value);
+  }
+  return Object.keys(target).length ? target : null;
+}
+
 /**
  * 调用 OpenAI 兼容的 /chat/completions 端点
  * @param {Object} opts
@@ -77,42 +98,72 @@ async function generateText({ messages, temperature = 0.85, jsonMode = false, fr
  * @param {number} [opts.frequency_penalty] - 频率惩罚
  * @param {number} [opts.presence_penalty] - 存在惩罚
  * @param {Function} [opts.onChunk] - 收到 chunk 时的回调 (chunk: {type: 'reasoning'|'content'|'complete', data: string, fullText?: string}) => void
- * @returns {Promise<{text: string, usage: Object, reasoning: string}>}
+ * @returns {Promise<{text: string, usage: Object, reasoning: string, model: string|null}>}
  */
-async function generateTextStream({ messages, temperature = 0.85, jsonMode = false, frequency_penalty, presence_penalty, onChunk }) {
-  const { baseUrl, apiKey, model, thinkingBudget } = await getEffectiveConfig();
-
-  const body = {
-    model,
-    messages,
-    temperature,
-    stream: true,
-  };
-
-  if (Number.isFinite(thinkingBudget)) body.thinking_budget = thinkingBudget;
-
-  if (Number.isFinite(frequency_penalty)) body.frequency_penalty = frequency_penalty;
-  if (Number.isFinite(presence_penalty)) body.presence_penalty = presence_penalty;
-
-  if (jsonMode) {
-    body.response_format = { type: 'json_object' };
-  }
-
-  // 空闲超时（非总时长）：每次收到数据就重置计时器，
-  // 思考型模型推理耗时不受 3 分钟墙钟限制，只要数据还在流动就不中断
+async function generateTextStream({ messages, temperature = 0.85, jsonMode = false, frequency_penalty, presence_penalty, onChunk, deadlineAt }) {
   const idleTimeoutMs = config.aiStreamIdleTimeoutMs || 90000;
+  const totalTimeoutMs = config.aiStreamTotalTimeoutMs || 240000;
+  const effectiveDeadlineAt = Number.isFinite(deadlineAt) ? deadlineAt : Date.now() + totalTimeoutMs;
   const controller = new AbortController();
-  let idleTimer = null;
-  const armIdleTimer = () => {
-    if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => {
-      controller.abort(new Error(`AI 流式响应空闲超时：${Math.round(idleTimeoutMs / 1000)}s 未收到数据`));
-    }, idleTimeoutMs);
+  let timeoutTimer = null;
+  let lastUpstreamActivityAt = Date.now();
+  let model = null;
+  let actualModel = null;
+  let usage = null;
+  const abortWithTimeout = (code, message) => {
+    const details = {
+      model: actualModel || model,
+      lastUpstreamActivityMs: Date.now() - lastUpstreamActivityAt,
+    };
+    if (usage) details.usage = { ...usage };
+    const error = new AIStreamTimeoutError(code, message, details);
+    controller.abort(error);
   };
-  armIdleTimer();
+  const armTimeout = () => {
+    if (timeoutTimer) clearTimeout(timeoutTimer);
+    const now = Date.now();
+    const idleDeadlineAt = lastUpstreamActivityAt + idleTimeoutMs;
+    const totalWins = effectiveDeadlineAt <= idleDeadlineAt;
+    const nextDeadlineAt = totalWins ? effectiveDeadlineAt : idleDeadlineAt;
+    const code = totalWins ? 'AI_STREAM_TOTAL_TIMEOUT' : 'AI_STREAM_IDLE_TIMEOUT';
+    const message = totalWins
+      ? `AI 流式响应总超时：${Math.round(totalTimeoutMs / 1000)}s 未完成`
+      : `AI 流式响应空闲超时：${Math.round(idleTimeoutMs / 1000)}s 未收到数据`;
+    timeoutTimer = setTimeout(() => abortWithTimeout(code, message), Math.max(0, nextDeadlineAt - now));
+  };
+  armTimeout();
 
   let response;
   try {
+    const abortPromise = new Promise((_, reject) => {
+      if (controller.signal.aborted) {
+        reject(controller.signal.reason);
+        return;
+      }
+      controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true });
+    });
+    const { baseUrl, apiKey, model: configuredModel, thinkingBudget } = await Promise.race([
+      getEffectiveConfig(),
+      abortPromise,
+    ]);
+    model = configuredModel;
+
+    const body = {
+      model,
+      messages,
+      temperature,
+      stream: true,
+    };
+
+    if (Number.isFinite(thinkingBudget)) body.thinking_budget = thinkingBudget;
+
+    if (Number.isFinite(frequency_penalty)) body.frequency_penalty = frequency_penalty;
+    if (Number.isFinite(presence_penalty)) body.presence_penalty = presence_penalty;
+
+    if (jsonMode) {
+      body.response_format = { type: 'json_object' };
+    }
+
     response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -133,8 +184,6 @@ async function generateTextStream({ messages, temperature = 0.85, jsonMode = fal
     let buffer = '';
     let fullText = '';
     let reasoningText = '';
-    let usage = null;
-    let modelMeta = null;
 
     // SSE 解析辅助函数
     function parseSSELine(line) {
@@ -157,7 +206,8 @@ async function generateTextStream({ messages, temperature = 0.85, jsonMode = fal
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      armIdleTimer(); // 收到数据，重置空闲计时
+      lastUpstreamActivityAt = Date.now();
+      armTimeout();
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
@@ -176,8 +226,8 @@ async function generateTextStream({ messages, temperature = 0.85, jsonMode = fal
         }
         if (event.parsed) {
           const chunk = event.parsed;
-          modelMeta = modelMeta || { model: chunk.model, created: chunk.created };
-          usage = usage || chunk.usage;
+          if (typeof chunk.model === 'string' && chunk.model) actualModel = chunk.model;
+          usage = mergeStreamUsage(usage || {}, chunk.usage);
 
           const choice = chunk.choices?.[0];
           if (!choice) continue;
@@ -197,7 +247,7 @@ async function generateTextStream({ messages, temperature = 0.85, jsonMode = fal
           }
 
           if (choice.finish_reason === 'stop') {
-            usage = chunk.usage;
+            usage = mergeStreamUsage(usage || {}, chunk.usage);
           }
         }
       }
@@ -206,11 +256,15 @@ async function generateTextStream({ messages, temperature = 0.85, jsonMode = fal
     return {
       text: fullText,
       reasoning: reasoningText,
+      model: actualModel || model,
       usage: usage || { total_tokens: 0, prompt_tokens: 0, completion_tokens: 0 },
     };
+  } catch (error) {
+    if (controller.signal.aborted) throw controller.signal.reason || error;
+    throw error;
   } finally {
-    if (idleTimer) clearTimeout(idleTimer);
+    if (timeoutTimer) clearTimeout(timeoutTimer);
   }
 }
 
-module.exports = { generateText, generateTextStream };
+module.exports = { generateText, generateTextStream, AIStreamTimeoutError };

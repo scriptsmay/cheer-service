@@ -19,7 +19,7 @@ const { renderTemplate, DEFAULT_PROMPTS } = require('../lib/prompt-template');
 const {
   getRequestId, getClientIp, shanghaiDate, normalizeClientId,
   isValidClientId, normalizeRequestId, hashValue, formatRate,
-  textLength, isObject, getErrorMessage,
+  textLength, isObject,
 } = require('../utils/helpers');
 const config = require('../config/env');
 
@@ -203,8 +203,8 @@ router.post('/', async (req, res) => {
     await usageCol.doc(quota.receiptId).update({ status: 'success', response: payload, updated_at: now.toISOString() });
 
     return successResponse(res, payload, requestId);
-  } catch (error) {
-    console.error('[ai-cheer] request failed', { requestId, message: getErrorMessage(error) });
+  } catch {
+    console.error('[ai-cheer] request failed', { requestId, code: 'WRITE_FAILED' });
     return errorResponse(res, 503, 'WRITE_FAILED', '服务暂时不可用，请稍后重试', requestId);
   }
 });
@@ -213,27 +213,41 @@ router.post('/', async (req, res) => {
 // 用于突破 Cloudflare 100s 同步超时限制，支持深度思考大模型
 router.post('/stream', async (req, res) => {
   const requestId = getRequestId(req);
+  const requestStartedAt = Date.now();
+  const totalDeadlineAt = requestStartedAt + (config.aiStreamTotalTimeoutMs || 240000);
+  const routeDeadline = createRouteDeadline(totalDeadlineAt);
+  const observer = createStreamRequestObserver(requestId, requestStartedAt);
+  observer.setPhase('auth');
+  let keepaliveTimer = null;
+  let isFinished = false;
 
-  const identity = await resolveIdentity(req);
-  if (!identity.ok) {
-    res.status(401).json({ error: 'SESSION_REQUIRED', message: '匿名会话无效或已过期', request_id: requestId });
-    return;
-  }
+  try {
+    const identity = await routeDeadline.run(() => resolveIdentity(req));
+    if (!identity.ok) {
+      observer.setTermination('unauthorized');
+      res.status(401).json({ error: 'SESSION_REQUIRED', message: '匿名会话无效或已过期', request_id: requestId });
+      return;
+    }
 
-  const body = req.body || {};
+    observer.setPhase('validation');
+    const body = req.body || {};
   const moodInput = typeof body.mood === 'string' ? body.mood.toLowerCase() : 'daily';
   const mood = MOOD_ALIASES[moodInput] || moodInput;
   const text = typeof body.text === 'string' ? body.text.trim() : '';
   const clientId = normalizeClientId(body.client_id || body._cid || 'unknown');
 
-  if (!ALLOWED_MOODS.has(mood) || textLength(text) > 120 || !isValidClientId(clientId)) {
-    res.status(400).json({ error: 'INVALID_ARGUMENT', message: '心情、补充文字或 client_id 不合法', request_id: requestId });
-    return;
-  }
-  if (isContentBlocked(text)) {
-    res.status(451).json({ error: 'CONTENT_BLOCKED', message: '补充文字未通过内容安全检查', request_id: requestId });
-    return;
-  }
+    if (!ALLOWED_MOODS.has(mood) || textLength(text) > 120 || !isValidClientId(clientId)) {
+      observer.setTermination('invalid_argument');
+      res.status(400).json({ error: 'INVALID_ARGUMENT', message: '心情、补充文字或 client_id 不合法', request_id: requestId });
+      return;
+    }
+    if (isContentBlocked(text)) {
+      observer.setTermination('content_blocked');
+      res.status(451).json({ error: 'CONTENT_BLOCKED', message: '补充文字未通过内容安全检查', request_id: requestId });
+      return;
+    }
+
+    routeDeadline.throwIfExpired();
 
   // 设置 SSE 响应头
   res.writeHead(200, {
@@ -249,8 +263,6 @@ router.post('/stream', async (req, res) => {
   // 发送初始连接确认
   res.write(`event: connected\ndata: {"request_id":"${requestId}"}\n\n`);
 
-  let keepaliveTimer = null;
-  let isFinished = false;
   let retryCount = 0;
   const MAX_RETRIES = 2;
 
@@ -270,22 +282,23 @@ router.post('/stream', async (req, res) => {
   }
 
   function sendEvent(event, data) {
-    if (isFinished) return;
+    if (isFinished || routeDeadline.expired()) return;
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   }
 
   async function runGeneration() {
     try {
-      const settings = await getCheerSettings();
+      observer.setPhase('preparation');
+      const settings = await routeDeadline.run(() => getCheerSettings());
       const dataMode = settings.mode;
-      const overview = dataMode === 'emotion' ? null : await getLatestOverview();
+      const overview = dataMode === 'emotion' ? null : await routeDeadline.run(() => getLatestOverview());
       const source = buildGroundedSource(overview, dataMode);
       const todayStr = shanghaiDate().date;
 
       let eventHit = null;
       let eventPhase = null;
       if (settings.event_context_enabled !== false) {
-        const hits = await getActiveEventsForDate(todayStr);
+        const hits = await routeDeadline.run(() => getActiveEventsForDate(todayStr));
         if (hits.length) {
           eventHit = hits[0];
           eventPhase = eventHit.phase;
@@ -293,11 +306,11 @@ router.post('/stream', async (req, res) => {
       }
       let dateContext = null;
       if (settings.date_context_enabled !== false) {
-        const avoidText = await getLastEventText(identity.subjectId);
+        const avoidText = await routeDeadline.run(() => getLastEventText(identity.subjectId));
         dateContext = getDateContext(todayStr, eventPhase, eventHit, avoidText);
       }
       const humanizeEnabled = settings.humanize_enabled !== false;
-      const recentOpenings = await getRecentOpenings(identity.subjectId, 14);
+      const recentOpenings = await routeDeadline.run(() => getRecentOpenings(identity.subjectId, 14));
 
       if (eventPhase && eventPhase.phase !== 'preview' && eventHit) {
         addRef(source.refs, eventHit.refs_label || '今日赛事', eventHit.refs_value || eventHit.title, 'cheer_events');
@@ -305,19 +318,25 @@ router.post('/stream', async (req, res) => {
       }
 
       const idempotencyKey = normalizeRequestId(req.headers?.['x-request-id'] || requestId);
-      const quota = await consumeAiQuota({
+      const quota = await routeDeadline.run(() => consumeAiQuota({
         subjectId: identity.subjectId,
         ipHash: hashValue(getClientIp(req), config.ipHashSalt),
         requestId: idempotencyKey,
         date: shanghaiDate().date,
-      });
+      }));
+
+      routeDeadline.throwIfExpired();
 
       if (!quota.allowed) {
+        routeDeadline.throwIfExpired();
+        observer.setTermination('rate_limited');
         sendEvent('error', { code: 'RATE_LIMITED', message: '今日应援生成额度已用完' });
         return false;
       }
       if (quota.response) {
         // 已有缓存结果，直接返回
+        routeDeadline.throwIfExpired();
+        observer.setTermination('cached');
         sendEvent('complete', quota.response);
         return true;
       }
@@ -340,19 +359,23 @@ router.post('/stream', async (req, res) => {
       ];
 
       // 开始流式生成
+      observer.setPhase('generation');
       let collectedText = '';
       let collectedReasoning = '';
       let lastSentLineCount = 0;
 
       startKeepalive();
 
-      const streamResult = await generateTextStream({
+      const streamResult = await routeDeadline.run(() => generateTextStream({
         messages,
         temperature: 0.85,
         jsonMode: true,
         frequency_penalty: promptCfg.frequency_penalty,
         presence_penalty: promptCfg.presence_penalty,
+        deadlineAt: totalDeadlineAt,
         onChunk: (chunk) => {
+          if (routeDeadline.expired() || isFinished) return;
+          observer.recordUpstreamChunk(chunk.type);
           if (chunk.type === 'reasoning') {
             collectedReasoning += chunk.data;
             // 只发增量片段，前端自行累计（避免 O(n²) 重复传输）
@@ -372,9 +395,11 @@ router.post('/stream', async (req, res) => {
             // 心跳已在定时器发送，跳过
           }
         },
-      });
+      }));
 
       stopKeepalive();
+      observer.recordStreamResult(streamResult);
+      observer.setPhase('validation');
 
       // 解析并校验完整输出
       const parsed = parseGeneratedText(collectedText);
@@ -385,7 +410,10 @@ router.post('/stream', async (req, res) => {
         recentOpenings: Array.isArray(recentOpenings) ? recentOpenings.map((r) => r.opening) : [],
       });
 
+      routeDeadline.throwIfExpired();
+
       if (validation.ok) {
+        observer.setPhase('persistence');
         const safeOutput = validation.output;
         const reportId = randomUUID();
         const now = new Date();
@@ -399,7 +427,7 @@ router.post('/stream', async (req, res) => {
           source_snapshot_at: sourceSnapshotAt,
         };
 
-        const aiReportsCol = await collection('ai_reports');
+        const aiReportsCol = await routeDeadline.run(() => collection('ai_reports'));
         const reportDoc = {
           report_id: reportId,
           module: 'aiCheer',
@@ -430,40 +458,63 @@ router.post('/stream', async (req, res) => {
         if (roles) reportDoc.roles = roles;
         // 思考/生成 token 用量落库（观测思考强度与耗时用）
         reportDoc.usage = streamResult.usage;
-        await aiReportsCol.doc(reportId).set(reportDoc);
-        await linkReportToTodayCheckin(identity.subjectId, reportId);
+        await routeDeadline.run(() => aiReportsCol.doc(reportId).set(reportDoc));
+        await routeDeadline.run(() => linkReportToTodayCheckin(identity.subjectId, reportId));
 
-        await commitAiQuota({ pendingCounts: quota.pendingCounts });
+        await routeDeadline.run(() => commitAiQuota({ pendingCounts: quota.pendingCounts }));
 
-        const usageCol = await collection('usage_limits');
-        await usageCol.doc(quota.receiptId).update({ status: 'success', response: payload, updated_at: now.toISOString() });
+        const usageCol = await routeDeadline.run(() => collection('usage_limits'));
+        await routeDeadline.run(() => usageCol.doc(quota.receiptId).update({ status: 'success', response: payload, updated_at: now.toISOString() }));
 
+        routeDeadline.throwIfExpired();
+        observer.setTermination('complete');
         sendEvent('complete', payload);
         return true;
       } else {
         // 校验失败，重试
         if (retryCount < MAX_RETRIES) {
           retryCount += 1;
+          observer.setRetryCount(retryCount);
           sendEvent('retry', { message: '检测到部分数据偏差，正在为你重新润色...', attempt: retryCount });
           return await runGeneration();
         } else {
+          routeDeadline.throwIfExpired();
+          observer.setTermination('output_invalid');
           sendEvent('error', { code: 'AI_OUTPUT_INVALID', message: '生成格式不稳定，请稍后重试' });
           return false;
         }
       }
     } catch (error) {
-      console.error('[ai-cheer-stream] request failed', { requestId, message: getErrorMessage(error) });
-      sendEvent('error', { code: 'WRITE_FAILED', message: '服务暂时不可用，请稍后重试' });
+      observer.recordStreamResult({ model: error && error.model, usage: error && error.usage });
+      const code = mapStreamErrorCode(error);
+      setStreamTermination(observer, code);
+      console.error('[ai-cheer-stream] request failed', { requestId, code });
+      if (routeDeadline.expired()) {
+        if (!res.writableEnded) res.write(`event: error\ndata: ${JSON.stringify({ code, message: getStreamErrorMessage(code) })}\n\n`);
+      } else {
+        sendEvent('error', { code, message: getStreamErrorMessage(code) });
+      }
       return false;
     }
   }
 
-  try {
-    await runGeneration();
+  await runGeneration();
+  } catch (error) {
+    const code = mapStreamErrorCode(error);
+    setStreamTermination(observer, code);
+    console.error('[ai-cheer-stream] request failed', { requestId, code });
+    if (res.headersSent) {
+      if (!res.writableEnded) res.write(`event: error\ndata: ${JSON.stringify({ code, message: getStreamErrorMessage(code) })}\n\n`);
+    } else {
+      const status = code === 'GENERATION_TIMEOUT' ? 504 : 500;
+      res.status(status).json({ error: code, message: getStreamErrorMessage(code), request_id: requestId });
+    }
   } finally {
+    observer.finalize();
+    routeDeadline.dispose();
     isFinished = true;
-    stopKeepalive();
-    res.end();
+    if (keepaliveTimer) clearInterval(keepaliveTimer);
+    if (!res.writableEnded) res.end();
   }
 });
 
@@ -503,9 +554,9 @@ async function generateValidatedOutput({ mood, text, source, requestId, mode, ct
           frequency_penalty: promptCfg.frequency_penalty,
           presence_penalty: promptCfg.presence_penalty,
         }));
-      } catch (error) {
-        lastFailure = { kind: 'model_error', reason: getErrorMessage(error) };
-        console.warn('[ai-cheer] model attempt failed', { requestId, attempt, candidate: c + 1, message: lastFailure.reason });
+      } catch {
+        lastFailure = { kind: 'model_error' };
+        console.warn('[ai-cheer] model attempt failed', { requestId, attempt, candidate: c + 1, code: 'MODEL_ATTEMPT_FAILED' });
       }
     }
     if (!candidateResults.length) continue; // 全部候选模型错误，进入下一次重试
@@ -916,9 +967,9 @@ async function linkReportToTodayCheckin(subjectId, reportId) {
     const checkinId = makeCheckinId(subjectId, shanghaiDate().date);
     const col = await collection('checkins');
     await col.doc(checkinId).update({ report_id: reportId, updated_at: new Date().toISOString() });
-  } catch (error) {
+  } catch {
     // 打卡关联失败不阻断生成主流程（下次生成会再尝试指向最新）
-    console.warn('[ai-cheer] link report to today checkin failed', { message: getErrorMessage(error) });
+    console.warn('[ai-cheer] link report to today checkin failed', { code: 'CHECKIN_LINK_FAILED' });
   }
 }
 
@@ -1020,6 +1071,153 @@ function normalizeSnapshotAt(value) {
   return '';
 }
 
+function mapStreamErrorCode(error) {
+  if (error && error.code === 'AI_STREAM_TOTAL_TIMEOUT') return 'GENERATION_TIMEOUT';
+  if (error && error.code === 'AI_STREAM_IDLE_TIMEOUT') return 'AI_STREAM_IDLE_TIMEOUT';
+  return 'WRITE_FAILED';
+}
+
+function getStreamErrorMessage(code) {
+  if (code === 'GENERATION_TIMEOUT') return '本次生成耗时过长，请重试';
+  if (code === 'AI_STREAM_IDLE_TIMEOUT') return '本次响应长时间未更新，请重试';
+  return '服务暂时不可用，请稍后重试';
+}
+
+function accumulateStreamUsage(target, incoming) {
+  if (!incoming || typeof incoming !== 'object') return target;
+  const next = target || {};
+  for (const field of ['total_tokens', 'prompt_tokens', 'completion_tokens']) {
+    const value = Number(incoming[field]);
+    if (Number.isFinite(value) && value >= 0) next[field] = (next[field] || 0) + value;
+  }
+  return Object.keys(next).length ? next : target;
+}
+
+function setStreamTermination(observer, code) {
+  if (code === 'GENERATION_TIMEOUT') observer.setTermination('total_timeout');
+  else if (code === 'AI_STREAM_IDLE_TIMEOUT') observer.setTermination('idle_timeout');
+  else observer.setTermination('error');
+}
+
+function createRouteDeadline(deadlineAt) {
+  let expired = false;
+  let disposed = false;
+  let timer = null;
+  let pendingReject = null;
+  const createError = () => {
+    const error = new Error('AI stream request deadline exceeded');
+    error.name = 'RouteDeadlineError';
+    error.code = 'AI_STREAM_TOTAL_TIMEOUT';
+    return error;
+  };
+  const expire = () => {
+    if (disposed || expired) return;
+    expired = true;
+    if (timer) clearTimeout(timer);
+    timer = null;
+    const reject = pendingReject;
+    pendingReject = null;
+    if (reject) reject(createError());
+  };
+  const remainingMs = deadlineAt - Date.now();
+  if (remainingMs <= 0) expire();
+  else timer = setTimeout(expire, remainingMs);
+  return {
+    expired() {
+      if (!disposed && Date.now() >= deadlineAt) expire();
+      return expired;
+    },
+    throwIfExpired() {
+      if (this.expired()) throw createError();
+    },
+    run(operation) {
+      if (this.expired()) return Promise.reject(createError());
+      return new Promise((resolve, reject) => {
+        pendingReject = reject;
+        let promise;
+        try {
+          promise = Promise.resolve(operation());
+        } catch (error) {
+          if (pendingReject === reject) pendingReject = null;
+          reject(error);
+          return;
+        }
+        promise.then((value) => {
+          if (pendingReject !== reject) return;
+          pendingReject = null;
+          if (expired) reject(createError());
+          else resolve(value);
+        }, (error) => {
+          if (pendingReject !== reject) return;
+          pendingReject = null;
+          reject(error);
+        });
+      });
+    },
+    dispose() {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      timer = null;
+      pendingReject = null;
+    },
+  };
+}
+
+function createStreamRequestObserver(requestId, startedAt, now = Date.now) {
+  const state = {
+    requestId,
+    startedAt,
+    phase: 'initializing',
+    termination: null,
+    model: null,
+    lastUpstreamActivityAt: startedAt,
+    reasoningChunkCount: 0,
+    contentChunkCount: 0,
+    retryCount: 0,
+    usage: null,
+  };
+  let finalized = false;
+  return {
+    setPhase(phase) {
+      state.phase = phase;
+    },
+    setTermination(termination) {
+      state.termination = termination;
+    },
+    setRetryCount(retryCount) {
+      state.retryCount = retryCount;
+    },
+    recordUpstreamChunk(type) {
+      state.lastUpstreamActivityAt = now();
+      if (type === 'reasoning') state.reasoningChunkCount += 1;
+      if (type === 'content') state.contentChunkCount += 1;
+    },
+    recordStreamResult(result) {
+      if (result && typeof result.model === 'string' && result.model) state.model = result.model;
+      state.usage = accumulateStreamUsage(state.usage, result && result.usage);
+    },
+    finalize() {
+      if (finalized) return undefined;
+      finalized = true;
+      const completedAt = now();
+      const summary = {
+        request_id: state.requestId,
+        elapsed_ms: completedAt - state.startedAt,
+        phase: state.phase,
+        termination: state.termination,
+        model: state.model,
+        last_upstream_activity_ms: completedAt - state.lastUpstreamActivityAt,
+        reasoning_chunks: state.reasoningChunkCount,
+        content_chunks: state.contentChunkCount,
+        retry_count: state.retryCount,
+      };
+      if (state.usage != null) summary.usage = state.usage;
+      console.info('[ai-cheer-stream] request summary', summary);
+      return summary;
+    },
+  };
+}
+
 module.exports = router;
 
 // ── 导出内部函数（供 CLI 脚本复用）──
@@ -1039,4 +1237,7 @@ module.exports.__test = {
   dedupeOpenings,
   getRecentOpenings,
   assignRoles,
+  mapStreamErrorCode,
+  createRouteDeadline,
+  createStreamRequestObserver,
 };

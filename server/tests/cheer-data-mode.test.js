@@ -10,7 +10,13 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { __test } = require('../src/routes/cheer');
-const { buildGroundedSource, buildSystemPrompt } = __test;
+const {
+  buildGroundedSource,
+  buildSystemPrompt,
+  mapStreamErrorCode,
+  createStreamRequestObserver,
+  createRouteDeadline,
+} = __test;
 
 // 模拟一份 season_summaries 文档：既有当前赛季 season_stats，也有生涯 career_summary
 const OVERVIEW = {
@@ -59,6 +65,92 @@ describe('buildGroundedSource — 数据模式分支', () => {
   test('无 overview 时退化为空数据', () => {
     const source = buildGroundedSource(null, 'season');
     assert.strictEqual(source.refs.length, 0);
+  });
+});
+
+describe('stream observability', () => {
+  test('route deadline helper 在绝对时间到达时终止挂起等待', async () => {
+    const deadline = createRouteDeadline(Date.now() + 20);
+    try {
+      await assert.rejects(
+        deadline.run(() => new Promise(() => {})),
+        (error) => error.code === 'AI_STREAM_TOTAL_TIMEOUT'
+      );
+      assert.equal(deadline.expired(), true);
+    } finally {
+      deadline.dispose();
+    }
+  });
+
+  test('服务内部超时错误映射为对应 SSE 错误码', () => {
+    assert.equal(mapStreamErrorCode({ code: 'AI_STREAM_TOTAL_TIMEOUT' }), 'GENERATION_TIMEOUT');
+    assert.equal(mapStreamErrorCode({ code: 'AI_STREAM_IDLE_TIMEOUT' }), 'AI_STREAM_IDLE_TIMEOUT');
+    assert.equal(mapStreamErrorCode({ code: 'UPSTREAM_FAILED' }), 'WRITE_FAILED');
+  });
+
+  test('重试摘要累计所有尝试 usage，model 取最近一次实际模型', () => {
+    const observer = createStreamRequestObserver('req-retry', 1000, () => 5000);
+    observer.recordStreamResult({ model: 'model-one', usage: { total_tokens: 10, prompt_tokens: 4, completion_tokens: 6 } });
+    observer.recordStreamResult({ model: 'model-two', usage: { total_tokens: 5, completion_tokens: 3 } });
+
+    const originalInfo = console.info;
+    console.info = () => {};
+    let summary;
+    try {
+      summary = observer.finalize();
+    } finally {
+      console.info = originalInfo;
+    }
+
+    assert.equal(summary.model, 'model-two');
+    assert.deepEqual(summary.usage, {
+      total_tokens: 15,
+      prompt_tokens: 4,
+      completion_tokens: 9,
+    });
+  });
+
+  test('请求结束时仅记录一次包含规定字段的摘要', () => {
+    let currentTime = 1000;
+    const observer = createStreamRequestObserver('req-123', 1000, () => currentTime);
+    currentTime = 1500;
+    observer.recordUpstreamChunk('reasoning');
+    currentTime = 2000;
+    observer.recordUpstreamChunk('content');
+    observer.recordStreamResult({ model: 'test-model', usage: { total_tokens: 7 } });
+    observer.setPhase('generation');
+    observer.setTermination('complete');
+    observer.setRetryCount(2);
+    currentTime = 4000;
+
+    const calls = [];
+    const originalInfo = console.info;
+    console.info = (...args) => calls.push(args);
+    let summary;
+    let repeatedSummary;
+    try {
+      summary = observer.finalize();
+      repeatedSummary = observer.finalize();
+    } finally {
+      console.info = originalInfo;
+    }
+
+    assert.deepEqual(summary, {
+      request_id: 'req-123',
+      elapsed_ms: 3000,
+      phase: 'generation',
+      termination: 'complete',
+      model: 'test-model',
+      last_upstream_activity_ms: 2000,
+      reasoning_chunks: 1,
+      content_chunks: 1,
+      retry_count: 2,
+      usage: { total_tokens: 7 },
+    });
+    assert.equal(repeatedSummary, undefined);
+    assert.deepEqual(calls, [
+      ['[ai-cheer-stream] request summary', summary],
+    ]);
   });
 });
 
