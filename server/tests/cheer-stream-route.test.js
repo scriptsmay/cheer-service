@@ -121,16 +121,20 @@ async function postStream({ body = { mood: 'daily', client_id: 'client-1234' } }
 async function captureConsole(fn) {
   const originalInfo = console.info;
   const originalError = console.error;
+  const originalWarn = console.warn;
   const info = [];
   const errors = [];
+  const warns = [];
   console.info = (...args) => info.push(args);
   console.error = (...args) => errors.push(args);
+  console.warn = (...args) => warns.push(args);
   try {
     const result = await fn();
-    return { result, info, errors };
+    return { result, info, errors, warns };
   } finally {
     console.info = originalInfo;
     console.error = originalError;
+    console.warn = originalWarn;
   }
 }
 
@@ -282,6 +286,46 @@ describe('/api/cheer/stream route', () => {
     assert.equal(summary.retry_count, 1);
     assert.equal(summary.model, 'model-two');
     assert.deepEqual(summary.usage, { total_tokens: 15, prompt_tokens: 4, completion_tokens: 9 });
+  });
+
+  test('校验失败记录 reason 并在重试请求中附带失败指令', async () => {
+    resetMocks();
+    const messageSnapshots = [];
+    ai.generateTextStream = async (options) => {
+      messageSnapshots.push(options.messages.map((m) => ({ role: m.role, content: m.content })));
+      if (messageSnapshots.length === 1) {
+        options.onChunk({ type: 'content', data: '短' });
+        return { text: '短', model: 'model-one', usage: { total_tokens: 10 } };
+      }
+      const text = JSON.stringify({
+        lines: [
+          '赛场灯光亮起时请稳住呼吸节奏',
+          '训练服上的汗渍都算数请继续',
+          '场边有人一直记得你的初心',
+          '把每一次团战都当成决赛来打',
+          '无论比分如何我们都站在你身后',
+        ],
+        emoji_caption: '一起加油',
+      });
+      options.onChunk({ type: 'content', data: text });
+      return { text, model: 'model-two', usage: { total_tokens: 20 } };
+    };
+
+    const captured = await captureConsole(() => postStream());
+    const summary = summaryFrom(captured.info);
+
+    assert.equal(messageSnapshots.length, 2, JSON.stringify(captured));
+    assert.equal(messageSnapshots[0].length, 2);
+    assert.equal(messageSnapshots[1].length, 3);
+    assert.match(messageSnapshots[1][2].content, /重新生成|字数|条数|不符合/);
+    const rejected = (captured.warns || [])
+      .filter(([label]) => label === '[ai-cheer] output rejected');
+    assert.equal(rejected.length, 1, JSON.stringify(captured));
+    assert.equal(rejected[0][1].reason, 'line_count');
+    assert.equal(rejected[0][1].attempt, 1);
+    assert.equal(summary.termination, 'complete');
+    assert.equal(summary.retry_count, 1);
+    assert.equal(summary.validation_failure, 'line_count');
   });
 
   test('所有 SSE 建立前终止路径都记录一次摘要', async () => {

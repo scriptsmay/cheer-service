@@ -265,6 +265,7 @@ router.post('/stream', async (req, res) => {
 
   let retryCount = 0;
   const MAX_RETRIES = 2;
+  let lastValidationFailure = null;
 
   // 15s 心跳保活，防止 Cloudflare 100s 超时
   function startKeepalive() {
@@ -357,6 +358,9 @@ router.post('/stream', async (req, res) => {
         { role: 'system', content: buildSystemPrompt(mood, source, dataMode, ctx) },
         { role: 'user', content: buildUserPrompt(mood, text, source, roles, promptCfg) },
       ];
+      if (lastValidationFailure) {
+        messages.push({ role: 'user', content: buildRetryInstruction(lastValidationFailure, promptCfg) });
+      }
 
       // 开始流式生成
       observer.setPhase('generation');
@@ -471,7 +475,9 @@ router.post('/stream', async (req, res) => {
         sendEvent('complete', payload);
         return true;
       } else {
-        // 校验失败，重试
+        lastValidationFailure = validation;
+        observer.setValidationFailure(validation.reason || validation.kind || 'unknown');
+        console.warn('[ai-cheer] output rejected', { requestId, attempt: retryCount + 1, reason: validation.reason, kind: validation.kind });
         if (retryCount < MAX_RETRIES) {
           retryCount += 1;
           observer.setRetryCount(retryCount);
@@ -1174,6 +1180,7 @@ function createStreamRequestObserver(requestId, startedAt, now = Date.now) {
     reasoningChunkCount: 0,
     contentChunkCount: 0,
     retryCount: 0,
+    validationFailure: null,
     usage: null,
   };
   let finalized = false;
@@ -1186,6 +1193,9 @@ function createStreamRequestObserver(requestId, startedAt, now = Date.now) {
     },
     setRetryCount(retryCount) {
       state.retryCount = retryCount;
+    },
+    setValidationFailure(reason) {
+      state.validationFailure = reason;
     },
     recordUpstreamChunk(type) {
       state.lastUpstreamActivityAt = now();
@@ -1211,6 +1221,7 @@ function createStreamRequestObserver(requestId, startedAt, now = Date.now) {
         content_chunks: state.contentChunkCount,
         retry_count: state.retryCount,
       };
+      if (state.validationFailure) summary.validation_failure = state.validationFailure;
       if (state.usage != null) summary.usage = state.usage;
       console.info('[ai-cheer-stream] request summary', summary);
       return summary;
