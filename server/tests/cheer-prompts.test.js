@@ -199,6 +199,18 @@ describe('settings-store — prompts 存取（mock DB）', () => {
     await assert.rejects(() => store.setCheerPrompts({ presence_penalty: 'x' }), /presence_penalty/);
   });
 
+  test('v1.4.1：后台不再提交 penalties 时，存量值不被重置（patch 语义）', async () => {
+    // 后台界面已移除 frequency_penalty / presence_penalty 两个旋钮（DeepSeek 系已废弃该参数），
+    // admin.js collectPromptsBody 随之不再提交这两个字段。此测试锁定该契约：
+    // 未提交的字段必须保持 DB 原值，而不是被 merge 回默认 0。
+    const store = await loadStore();
+    await store.setCheerPrompts({ frequency_penalty: 0.5, presence_penalty: 0.3 });
+    const after = await store.setCheerPrompts({ candidate_count: 2 });
+    assert.strictEqual(after.candidate_count, 2, '提交的字段生效');
+    assert.strictEqual(after.frequency_penalty, 0.5, '未提交的 frequency_penalty 应保留原值');
+    assert.strictEqual(after.presence_penalty, 0.3, '未提交的 presence_penalty 应保留原值');
+  });
+
   test('用户补充模板（user_text_hint）：可配置、非法占位符拒绝', async () => {
     const store = await loadStore();
     const saved = await store.setCheerPrompts({ user_text_hint: '自定义呼应 {{user_text}}，{{line_count}} 条中至少一条' });

@@ -1,6 +1,6 @@
 {
   "name": "cheer-service",
-  "version": "1.3.0",
+  "version": "1.4.1",
   "description": "Wuyan KPL cheer backend - migrated from TCB cloud functions to Express + MongoDB",
   "type": "commonjs",
   "main": "server/src/app.js",

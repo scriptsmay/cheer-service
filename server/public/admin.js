@@ -432,8 +432,6 @@ async function refreshPrompts() {
     document.getElementById('promptLineMinChars').value = p.line_min_chars ?? 20;
     document.getElementById('promptTargetRange').value = p.line_target_range ?? '30-50';
     document.getElementById('promptCandidateCount').value = p.candidate_count ?? 1;
-    document.getElementById('promptFreqPenalty').value = p.frequency_penalty ?? 0;
-    document.getElementById('promptPresPenalty').value = p.presence_penalty ?? 0;
     document.getElementById('promptEventMinStrong').value = p.event_min_lines_strong ?? 1;
     document.getElementById('promptEventMinPreview').value = p.event_min_lines_preview ?? 1;
     document.getElementById('promptStrongHint').value = p.event_strong_hint || '';
@@ -453,8 +451,6 @@ function collectPromptsBody() {
     line_min_chars: num('promptLineMinChars', 20),
     line_target_range: document.getElementById('promptTargetRange').value.trim(),
     candidate_count: num('promptCandidateCount', 1),
-    frequency_penalty: num('promptFreqPenalty', 0),
-    presence_penalty: num('promptPresPenalty', 0),
     event_min_lines_strong: num('promptEventMinStrong', 1),
     event_min_lines_preview: num('promptEventMinPreview', 1),
     event_strong_hint: document.getElementById('promptStrongHint').value,

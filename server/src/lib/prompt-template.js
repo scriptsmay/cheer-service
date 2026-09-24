@@ -112,9 +112,16 @@ const DEFAULT_PROMPTS = {
   // 用户补充提示（text 非空时替换原「用户补充：」行）：给模型明确指令把补充内容织入文案，
   // 否则补充行会被角色分工/格式约束淹没（线上疑问：text 无权重感，根因即此）
   user_text_hint: '用户补充是用户此刻想传达的话：「{{user_text}}」。至少一条文案要自然呼应或化用其内容，其余保持原有角色角度；不要逐字照抄整句，不要生硬嵌字。',
-  // 采样参数（v1.1.0 Task 6）：0 起步观察，后台可调；candidate_count > 1 时一次生成多候选校验择优（免费期零负担，出免费期建议回 1）
+  // 采样惩罚参数（v1.1.0 Task 6）：**当前模型不支持，保留字段为将来切模型留退路**。
+  // DeepSeek 系 API 已官方标注 frequency_penalty / presence_penalty 为 deprecated
+  // （原文："It will not take effect if you pass it to the API"），服务端静默丢弃、不报错。
+  // 且其原理是单次请求内的 token 惩罚，本就无法解决跨请求/跨天的文案雷同。
+  // 防重复实际由 cheer.js 的「历史开头注入 + repeat_opening 校验层」承担；
+  // 后台界面已移除这两个旋钮（v1.4.1），避免"已配置防重复"的错觉。
+  // 若将来切回 OpenAI / 通义等支持该参数的模型，ai.js 的透传逻辑可直接复用。
   frequency_penalty: 0,
   presence_penalty: 0,
+  // candidate_count > 1 时一次生成多候选校验择优（免费期零负担，出免费期建议回 1）
   candidate_count: 1,
   few_shot_examples: [],
 };

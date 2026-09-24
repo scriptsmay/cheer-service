@@ -92,7 +92,7 @@ async function main() {
     console.log(`数据来源：本地文件 ${options.dataFile}`);
   } else if (options.useData) {
     const { getLatestOverview } = cheerExports.__test || cheerExports;
-    const { close: closeDb } = require(path.join(serverSrc, 'db', 'mongo'));
+    const { close: closeDb } = require(path.join(serverSrc, 'db'));
     overview = await getLatestOverview();
     needDbClose = true;
     if (needDbClose) await closeDb();
@@ -118,7 +118,7 @@ async function main() {
       try {
         const { getActiveEventsForDate } = require(path.join(serverSrc, 'services', 'settings-store'));
         hits = await getActiveEventsForDate(todayStr);
-        const { close: closeDb } = require(path.join(serverSrc, 'db', 'mongo'));
+        const { close: closeDb } = require(path.join(serverSrc, 'db'));
         await closeDb();
       } catch (e) {
         console.warn(`（DB 事件表不可用，跳过事件注入：${e.message}）`);

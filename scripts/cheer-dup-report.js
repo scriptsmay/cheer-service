@@ -22,7 +22,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const projectRoot = path.resolve(__dirname, '..');
-const { collection, close, command } = require(path.join(projectRoot, 'server', 'src', 'db', 'mongo'));
+// 经 db 门面（按 DB_DRIVER 选 mongo | postgres），避免硬编码 mongo 在切库后连不上
+const { collection, close, command } = require(path.join(projectRoot, 'server', 'src', 'db'));
 const { shanghaiDate } = require(path.join(projectRoot, 'server', 'src', 'utils', 'helpers'));
 
 const OPENING_CHARS = 8;      // 与 cheer.js 开头指纹口径一致
@@ -52,7 +53,16 @@ function printHelp() {
   console.log(`用法：npm run report:cheer-dup [-- --days 14,30] [--out file.md] [--subject id] [--feishu-webhook url]`);
 }
 
-/** 输出开头指纹：首行去空白后取前 8 字（与 cheer.js extractOpening 口径一致，不去标点以保持独立实现简单） */
+/**
+ * 输出开头指纹：首行去空白后取前 8 字。
+ *
+ * ⚠️ 口径偏差已知（v1.4.1 标注，暂不修改）：cheer.js 的 extractOpening 会先去掉
+ * 前导标点（LEADING_PUNCT：引号/括号/顿号等）再取 8 字，本函数不去标点。
+ * 故首行以标点起头时，本脚本统计的指纹与校验层实际判定用的指纹可能不同，
+ * 这里的"开头精确重复率"与线上重复率存在轻微口径差（量级小，绝大多数首行不以标点起头）。
+ * 本函数刻意保持独立实现（不 import cheer.js 内部常量），是否统一口径留待复评；
+ * 对比历史数据时需注意此差异。
+ */
 function openingOf(doc) {
   const lines = doc && doc.ai_output && Array.isArray(doc.ai_output.lines) ? doc.ai_output.lines : [];
   const first = lines.find((line) => typeof line === 'string' && line.trim());
