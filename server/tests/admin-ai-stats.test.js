@@ -72,8 +72,8 @@ test('ai/stats aggregates attempts by model and requires auth', async () => {
   assert.deepEqual(Object.keys(data), ['window', 'generated_at', 'models']);
   assert.equal(data.window, '24h');
   assert.deepEqual(data.models, [
-    { model: 'm1', samples: 2, complete: 1, success_rate: 0.5, p50_ms: 100, p95_ms: 200, retries: 2, validation_failures: 1, tokens: 14 },
-    { model: 'm2', samples: 1, complete: 1, success_rate: 1, p50_ms: 300, p95_ms: 300, retries: 1, validation_failures: 0, tokens: 8 },
+    { model: 'm2', samples: 1, complete: 1, success_rate: 1, p50_ms: 300, p95_ms: 300, retries: 1, validation_failures: 0, validation_reasons: {}, tokens: 8 },
+    { model: 'm1', samples: 2, complete: 1, success_rate: 0.5, p50_ms: 100, p95_ms: 200, retries: 2, validation_failures: 1, validation_reasons: { too_short: 1 }, tokens: 14 },
   ]);
   assert.doesNotMatch(response.body, /request_id|output|api_key|base_url/i);
 });

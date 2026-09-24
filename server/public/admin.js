@@ -129,6 +129,7 @@ async function refreshAIStats() {
         + '<div class="stat-line"><span>成功率</span><span>' + escapeHtml(rate) + '</span></div>'
         + '<div class="stat-line"><span>P50 / P95</span><span>' + escapeHtml(String(m.p50_ms ?? '-')) + ' / ' + escapeHtml(String(m.p95_ms ?? '-')) + ' ms</span></div>'
         + '<div class="stat-line"><span>重试 / 校验失败</span><span>' + escapeHtml(String(m.retries ?? 0)) + ' / ' + escapeHtml(String(m.validation_failures ?? 0)) + '</span></div>'
+        + '<div class="stat-line"><span>失败原因</span><span>' + escapeHtml(Object.entries(m.validation_reasons || {}).map(([reason, count]) => reason + ' × ' + count).join('，') || '—') + '</span></div>'
         + '<div class="stat-line"><span>Tokens</span><span>' + escapeHtml(String(m.tokens ?? 0)) + '</span></div>'
         + '</div>';
     }).join('');

@@ -94,10 +94,16 @@ router.get('/ai/stats', requireAuth, async (req, res) => {
         p95_ms: percentile(elapsed, 0.95),
         retries: attempts.reduce((sum, attempt) => sum + (Number(attempt.retry_count) || 0), 0),
         validation_failures: attempts.filter((attempt) => attempt.validation_failure).length,
+        validation_reasons: attempts.reduce((counts, attempt) => {
+          const reason = attempt.validation_failure;
+          if (reason) counts[reason] = (counts[reason] || 0) + 1;
+          return counts;
+        }, {}),
         tokens: attempts.reduce((sum, attempt) => sum + (Number(attempt.usage?.total_tokens) || 0), 0),
       };
     });
 
+    models.sort((a, b) => b.success_rate - a.success_rate || (a.p95_ms || Infinity) - (b.p95_ms || Infinity));
     res.json({ window, generated_at: new Date().toISOString(), models });
   } catch (err) {
     res.status(500).json({ code: 500, message: '服务内部错误' });
