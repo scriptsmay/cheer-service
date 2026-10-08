@@ -15,15 +15,20 @@ function hashValue(value, salt = '') {
 }
 
 function getTimeSlot(now = new Date()) {
+  const dateObj = now instanceof Date && !Number.isNaN(now.getTime())
+    ? now
+    : (now !== null && now !== undefined ? new Date(now) : new Date());
+  const validDate = Number.isNaN(dateObj.getTime()) ? new Date() : dateObj;
+
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Shanghai',
     hour: 'numeric',
     minute: 'numeric',
     hourCycle: 'h23',
   });
-  const parts = Object.fromEntries(formatter.formatToParts(now).map((part) => [part.type, part.value]));
+  const parts = Object.fromEntries(formatter.formatToParts(validDate).map((part) => [part.type, part.value]));
   const hour = parseInt(parts.hour, 10);
-  const minute = parts.minute;
+  const minute = String(parts.minute || '00').padStart(2, '0');
   let slot = 'morning';
   let slotLabel = '早晨/上午';
   let promptHint = '当前为早晨/上午时段（06:00-12:00）。文案若涉及粉丝生活作息，优先写上班/上学通勤、晨间打气、开启新一天；严禁写"下班""放学回家""晚安"等下半天/晚间场景。';
@@ -53,6 +58,11 @@ function getTimeSlot(now = new Date()) {
 }
 
 function shanghaiDate(now = new Date()) {
+  const dateObj = now instanceof Date && !Number.isNaN(now.getTime())
+    ? now
+    : (now !== null && now !== undefined ? new Date(now) : new Date());
+  const validDate = Number.isNaN(dateObj.getTime()) ? new Date() : dateObj;
+
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Shanghai',
     year: 'numeric',
@@ -63,10 +73,10 @@ function shanghaiDate(now = new Date()) {
     const parts = Object.fromEntries(formatter.formatToParts(value).map((part) => [part.type, part.value]));
     return `${parts.year}-${parts.month}-${parts.day}`;
   };
-  const timeSlot = getTimeSlot(now);
+  const timeSlot = getTimeSlot(validDate);
   return {
-    date: format(now),
-    yesterday: format(new Date(now.getTime() - DAY_MS)),
+    date: format(validDate),
+    yesterday: format(new Date(validDate.getTime() - DAY_MS)),
     hour: timeSlot.hour,
     timeSlot,
   };

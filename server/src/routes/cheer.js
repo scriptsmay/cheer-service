@@ -909,10 +909,10 @@ function checkAiFlavor(lines, opts = {}) {
   for (const re of PARALLEL_PATTERNS) {
     if (re.test(all)) return { rule: 'parallel_pattern', detail: '排比句式' };
   }
-  // 6. 时段违和拦截：早晨/上午时段（06:00 - 12:00）严禁出现「下班/放学回家/晚安」等晚间词汇
-  const timeSlot = opts.timeSlot !== undefined ? opts.timeSlot : getTimeSlot();
+  // 6. 时段违和拦截：早晨/上午时段（06:00 - 12:00）严禁出现「下班/放学/晚安」等晚间词汇
+  const timeSlot = opts.timeSlot;
   if (timeSlot && timeSlot.slot === 'morning') {
-    if (/(?:下班|放学回家|晚安)/u.test(all)) {
+    if (/(?:下班|放学|晚安)/u.test(all)) {
       return { rule: 'time_slot_mismatch', detail: '上午时段出现下班/晚间词汇' };
     }
   }

@@ -403,7 +403,7 @@ describe('checkAiFlavor — 反 AI 味规则（5 条基准）', () => {
     );
   });
 
-  test('时段违和拦截：上午时段严禁下班/放学回家/晚安', () => {
+  test('时段违和拦截：上午时段严禁下班/放学/晚安', () => {
     const morningOpts = { timeSlot: { slot: 'morning', hour: 8 } };
     assert.strictEqual(
       checkAiFlavor(['下班刷到超话就进来冒个泡，今天训练顺利吗', '为你加油', '好好休息', '翻翻旧录像', '日常打气'], morningOpts)?.rule,
@@ -415,6 +415,10 @@ describe('checkAiFlavor — 反 AI 味规则（5 条基准）', () => {
     );
     assert.strictEqual(
       checkAiFlavor(['放学回家看到训练赛消息太开心了', '为你加油', '好好休息', '翻翻旧录像', '日常打气'], morningOpts)?.rule,
+      'time_slot_mismatch'
+    );
+    assert.strictEqual(
+      checkAiFlavor(['放学了看到训练赛消息太开心了', '为你加油', '好好休息', '翻翻旧录像', '日常打气'], morningOpts)?.rule,
       'time_slot_mismatch'
     );
     assert.strictEqual(
@@ -430,6 +434,12 @@ describe('checkAiFlavor — 反 AI 味规则（5 条基准）', () => {
     const eveningOpts = { timeSlot: { slot: 'evening', hour: 19 } };
     assert.strictEqual(
       checkAiFlavor(['下班刷到超话就进来冒个泡，今天训练顺利吗', '为你加油', '好好休息', '翻翻旧录像', '日常打气'], eveningOpts),
+      null
+    );
+    // 下午时段不触发 morning 拦截
+    const afternoonOpts = { timeSlot: { slot: 'afternoon', hour: 14 } };
+    assert.strictEqual(
+      checkAiFlavor(['午后偷闲刷到超话，为你加油', '为你加油', '好好休息', '翻翻旧录像', '日常打气'], afternoonOpts),
       null
     );
   });
@@ -505,6 +515,29 @@ describe('inspectGeneratedOutput — 条数与 ai_flavor 校验接入', () => {
     assert.strictEqual(res.ok, false);
     assert.strictEqual(res.reason, 'ai_flavor');
     assert.strictEqual(res.ai.rule, 'time_slot_mismatch');
+  });
+
+  test('晚间时段或 timeSlot 为 null 时放行下班文案', () => {
+    const lines = [
+      '下班刷到超话就进来冒个泡，今天训练顺利吗',
+      '等你回来的每一天都有在认真生活',
+      '今天喝到了好喝的奶茶，突然想到你',
+      '翻出去年夏天的比赛录像又看了一遍',
+      '日常散步的时候在超话刷到你的图',
+    ];
+    const eveningRes = inspectGeneratedOutput(
+      { lines, emoji_caption: '加油' },
+      EMPTY_SOURCE,
+      { humanize: true, timeSlot: { slot: 'evening', hour: 19 } }
+    );
+    assert.strictEqual(eveningRes.ok, true, '晚间时段应放行下班文案');
+
+    const nullSlotRes = inspectGeneratedOutput(
+      { lines, emoji_caption: '加油' },
+      EMPTY_SOURCE,
+      { humanize: true, timeSlot: null }
+    );
+    assert.strictEqual(nullSlotRes.ok, true, 'timeSlot 为 null 时不触发时段违和拦截');
   });
 });
 

@@ -91,6 +91,31 @@ describe('getTimeSlot', () => {
     assert.strictEqual(slot.slotLabel, '深夜/凌晨');
     assert.match(slot.promptHint, /夜猫子/);
   });
+
+  test('boundary hour transitions (05:59->night, 06:00->morning, 11:59->morning, 12:00->afternoon, 17:59->afternoon, 18:00->evening, 23:59->evening, 00:00->night)', () => {
+    assert.strictEqual(getTimeSlot(new Date('2026-10-07T21:59:00Z')).slot, 'night');     // 05:59 BJ
+    assert.strictEqual(getTimeSlot(new Date('2026-10-07T22:00:00Z')).slot, 'morning');   // 06:00 BJ
+    assert.strictEqual(getTimeSlot(new Date('2026-10-08T03:59:00Z')).slot, 'morning');   // 11:59 BJ
+    assert.strictEqual(getTimeSlot(new Date('2026-10-08T04:00:00Z')).slot, 'afternoon'); // 12:00 BJ
+    assert.strictEqual(getTimeSlot(new Date('2026-10-08T09:59:00Z')).slot, 'afternoon'); // 17:59 BJ
+    assert.strictEqual(getTimeSlot(new Date('2026-10-08T10:00:00Z')).slot, 'evening');   // 18:00 BJ
+    assert.strictEqual(getTimeSlot(new Date('2026-10-08T15:59:00Z')).slot, 'evening');   // 23:59 BJ
+    assert.strictEqual(getTimeSlot(new Date('2026-10-08T16:00:00Z')).slot, 'night');     // 00:00 BJ
+  });
+
+  test('defensive parsing with string, timestamp, null, undefined, invalid date', () => {
+    const fromStr = getTimeSlot('2026-10-08T07:15:00+08:00');
+    assert.strictEqual(fromStr.hour, 7);
+    assert.strictEqual(fromStr.slot, 'morning');
+
+    const fromTs = getTimeSlot(new Date('2026-10-08T19:00:00+08:00').getTime());
+    assert.strictEqual(fromTs.hour, 19);
+    assert.strictEqual(fromTs.slot, 'evening');
+
+    assert.ok(getTimeSlot(null).slot);
+    assert.ok(getTimeSlot(undefined).slot);
+    assert.ok(getTimeSlot('invalid-date-string').slot);
+  });
 });
 
 describe('normalizeClientId', () => {
