@@ -12,6 +12,7 @@ const assert = require('node:assert/strict');
 const {
   hashValue,
   shanghaiDate,
+  getTimeSlot,
   normalizeClientId,
   isValidClientId,
   normalizeRequestId,
@@ -48,6 +49,47 @@ describe('shanghaiDate', () => {
     // 2026-07-23T16:00:00Z = 2026-07-24 00:00 Shanghai
     const result = shanghaiDate(new Date('2026-07-23T16:00:00Z'));
     assert.strictEqual(result.date, '2026-07-24');
+    assert.strictEqual(result.hour, 0);
+    assert.strictEqual(result.timeSlot.slot, 'night');
+  });
+});
+
+describe('getTimeSlot', () => {
+  test('07:00 identifies as morning slot with commuter prompt hint', () => {
+    // 2026-10-08T07:00:00+08:00 = 2026-10-07T23:00:00Z
+    const slot = getTimeSlot(new Date('2026-10-07T23:00:00Z'));
+    assert.strictEqual(slot.hour, 7);
+    assert.strictEqual(slot.slot, 'morning');
+    assert.strictEqual(slot.slotLabel, '早晨/上午');
+    assert.match(slot.promptHint, /上班\/上学通勤/);
+    assert.match(slot.promptHint, /严禁写"下班"/);
+  });
+
+  test('13:30 identifies as afternoon slot', () => {
+    // 2026-10-08T13:30:00+08:00 = 2026-10-08T05:30:00Z
+    const slot = getTimeSlot(new Date('2026-10-08T05:30:00Z'));
+    assert.strictEqual(slot.hour, 13);
+    assert.strictEqual(slot.slot, 'afternoon');
+    assert.strictEqual(slot.slotLabel, '午间/下午');
+    assert.match(slot.promptHint, /午休摸鱼/);
+  });
+
+  test('19:15 identifies as evening slot', () => {
+    // 2026-10-08T19:15:00+08:00 = 2026-10-08T11:15:00Z
+    const slot = getTimeSlot(new Date('2026-10-08T11:15:00Z'));
+    assert.strictEqual(slot.hour, 19);
+    assert.strictEqual(slot.slot, 'evening');
+    assert.strictEqual(slot.slotLabel, '傍晚/晚间');
+    assert.match(slot.promptHint, /下班路上/);
+  });
+
+  test('02:00 identifies as night slot', () => {
+    // 2026-10-08T02:00:00+08:00 = 2026-10-07T18:00:00Z
+    const slot = getTimeSlot(new Date('2026-10-07T18:00:00Z'));
+    assert.strictEqual(slot.hour, 2);
+    assert.strictEqual(slot.slot, 'night');
+    assert.strictEqual(slot.slotLabel, '深夜/凌晨');
+    assert.match(slot.promptHint, /夜猫子/);
   });
 });
 

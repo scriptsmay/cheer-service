@@ -17,7 +17,7 @@ const { getDateContext } = require('../lib/date-context');
 const { makeCheckinId } = require('../utils/checkin-summary');
 const { renderTemplate, DEFAULT_PROMPTS } = require('../lib/prompt-template');
 const {
-  getRequestId, getClientIp, shanghaiDate, normalizeClientId,
+  getRequestId, getClientIp, shanghaiDate, getTimeSlot, normalizeClientId,
   isValidClientId, normalizeRequestId, hashValue, formatRate,
   textLength, isObject,
 } = require('../utils/helpers');
@@ -99,7 +99,9 @@ router.post('/', async (req, res) => {
     const dataMode = settings.mode;
     const overview = dataMode === 'emotion' ? null : await getLatestOverview();
     const source = buildGroundedSource(overview, dataMode);
-    const todayStr = shanghaiDate().date;
+    const todayClock = shanghaiDate();
+    const todayStr = todayClock.date;
+    const timeSlot = todayClock.timeSlot;
 
     // ── 时间上下文 / 赛事事件 / 反 AI 味 组装（全部开关可控，线上可关）──
     let eventHit = null;
@@ -132,13 +134,13 @@ router.post('/', async (req, res) => {
       subjectId: identity.subjectId,
       ipHash: hashValue(getClientIp(req), config.ipHashSalt),
       requestId: idempotencyKey,
-      date: shanghaiDate().date,
+      date: todayStr,
     });
 
     if (!quota.allowed) return errorResponse(res, 429, 'RATE_LIMITED', '今日应援生成额度已用完', requestId, 86400);
     if (quota.response) return successResponse(res, quota.response, requestId);
 
-    const ctx = { dateContext, eventHit, eventPhase, humanizeEnabled, prompts: settings.prompts, recentOpenings, date: todayStr };
+    const ctx = { dateContext, timeSlot, eventHit, eventPhase, humanizeEnabled, prompts: settings.prompts, recentOpenings, date: todayStr };
     const generation = await generateValidatedOutput({ mood, text, source, requestId, mode: dataMode, ctx });
     if (!generation.ok) {
       await markReceipt(quota.receiptId, 'failed');
@@ -294,7 +296,9 @@ router.post('/stream', async (req, res) => {
       const dataMode = settings.mode;
       const overview = dataMode === 'emotion' ? null : await routeDeadline.run(() => getLatestOverview());
       const source = buildGroundedSource(overview, dataMode);
-      const todayStr = shanghaiDate().date;
+      const todayClock = shanghaiDate();
+      const todayStr = todayClock.date;
+      const timeSlot = todayClock.timeSlot;
 
       let eventHit = null;
       let eventPhase = null;
@@ -323,7 +327,7 @@ router.post('/stream', async (req, res) => {
         subjectId: identity.subjectId,
         ipHash: hashValue(getClientIp(req), config.ipHashSalt),
         requestId: idempotencyKey,
-        date: shanghaiDate().date,
+        date: todayStr,
       }));
 
       routeDeadline.throwIfExpired();
@@ -342,7 +346,7 @@ router.post('/stream', async (req, res) => {
         return true;
       }
 
-      const ctx = { dateContext, eventHit, eventPhase, humanizeEnabled, prompts: settings.prompts, recentOpenings, date: todayStr };
+      const ctx = { dateContext, timeSlot, eventHit, eventPhase, humanizeEnabled, prompts: settings.prompts, recentOpenings, date: todayStr };
       const promptCfg = ctx.prompts && typeof ctx.prompts === 'object' ? ctx.prompts : DEFAULT_PROMPTS;
       const lineCount = Number.isInteger(promptCfg.line_count) ? promptCfg.line_count : CHEER_LINE_COUNT;
       const roles = assignRoles({
@@ -412,6 +416,7 @@ router.post('/stream', async (req, res) => {
         anchorNumbers: collectAnchorNumbers(ctx, source),
         line_count: promptCfg.line_count,
         recentOpenings: Array.isArray(recentOpenings) ? recentOpenings.map((r) => r.opening) : [],
+        timeSlot: ctx && ctx.timeSlot,
       });
 
       routeDeadline.throwIfExpired();
@@ -575,6 +580,7 @@ async function generateValidatedOutput({ mood, text, source, requestId, mode, ct
         anchorNumbers: collectAnchorNumbers(ctx, source),
         line_count: promptCfg.line_count,
         recentOpenings: recentOpeningSet,
+        timeSlot: ctx && ctx.timeSlot,
       });
       console.log('[ai-cheer] model completed', { requestId, attempt, totalTokens: result?.usage?.total_tokens });
       if (validation.ok) return { ok: true, output: validation.output, roles, candidates: candidateCount };
@@ -697,7 +703,7 @@ const OFFSEASON_CONSTRAINT_ASIAN_GAMES = `
 // 留代码红线：措辞不可后台改，但条数口径随生效配置动态渲染，防条数调整后文案漂移
 const HUMANIZE_GUIDE = `
 避免 AI 腔：禁止排比三连句式（"不只是…更是…"）、禁止连续感叹号（最多一个）、禁止抽象词堆叠（梦想/热爱/永远/信念 每词整次输出最多一次）、禁止句式同构（{{line_count}} 条文案开头雷同）、禁止口号式收尾（每句都是正能量总结）。
-像粉丝真的在打字：有停顿、有细节、允许一点点随意，不要每句都像精心设计的金句。
+像粉丝真的在打字：有停顿、有细节、允许一点点随意，不要每句都像精心设计的金句。时间真实感：文案若带生活作息细节，必须严格符合当前时段（上午写晨间/通勤/开工，严禁在上午写"下班/回家"；下午 18:00 后才写下班/晚间放松；没有合适语境就纯写应援，不要生硬拼凑）。
 `;
 
 // 三档事件提示模板默认值已迁移至 prompt-template.js DEFAULT_PROMPTS（v1.1.0 配置化：
@@ -750,6 +756,10 @@ function buildSystemPrompt(mood, source, mode = 'season', ctx = {}) {
     parts.push(
       `今日背景：${ctx.dateContext.dateLabel}，${ctx.dateContext.anchors.map((a) => a.text).join('；')}\n${rendered.ok ? rendered.text : template}`
     );
+  }
+  const timeSlot = ctx && ctx.timeSlot !== undefined ? ctx.timeSlot : getTimeSlot();
+  if (timeSlot && timeSlot.promptHint) {
+    parts.push(`时段指引（${timeSlot.timeLabel} ${timeSlot.slotLabel}）：${timeSlot.promptHint}`);
   }
   parts.push(`语气：${moodPrompts[mood]}`);
   parts.push(`可引用数据：${source.promptLines.length ? source.promptLines.join('；') : '无，生成纯情绪应援文案'}`);
@@ -814,7 +824,8 @@ function inspectGeneratedOutput(output, source, opts = {}) {
   }
   // 反 AI 味量化校验（可关）：误伤不阻断服务，只触发重试
   if (opts.humanize !== false) {
-    const ai = checkAiFlavor(output.lines);
+    const timeSlot = opts.timeSlot !== undefined ? opts.timeSlot : getTimeSlot();
+    const ai = checkAiFlavor(output.lines, { ...opts, timeSlot });
     if (ai) {
       return { ok: false, kind: 'invalid_output', reason: 'ai_flavor', ai };
     }
@@ -869,7 +880,7 @@ const PARALLEL_PATTERNS = [
 const LEADING_PUNCT = /^[\s"'“”‘’《〈「『\[【(:：]+/u;
 
 /** 返回首个命中的 AI 味规则，或 null */
-function checkAiFlavor(lines) {
+function checkAiFlavor(lines, opts = {}) {
   const all = lines.join('\n');
   // 1. 连续感叹号（半角/全角）
   if (/!{2,}/u.test(all) || /！{2,}/u.test(all)) {
@@ -898,6 +909,13 @@ function checkAiFlavor(lines) {
   for (const re of PARALLEL_PATTERNS) {
     if (re.test(all)) return { rule: 'parallel_pattern', detail: '排比句式' };
   }
+  // 6. 时段违和拦截：早晨/上午时段（06:00 - 12:00）严禁出现「下班/放学回家/晚安」等晚间词汇
+  const timeSlot = opts.timeSlot !== undefined ? opts.timeSlot : getTimeSlot();
+  if (timeSlot && timeSlot.slot === 'morning') {
+    if (/(?:下班|放学回家|晚安)/u.test(all)) {
+      return { rule: 'time_slot_mismatch', detail: '上午时段出现下班/晚间词汇' };
+    }
+  }
   return null;
 }
 
@@ -911,6 +929,9 @@ function buildRetryInstruction(failure, promptCfg = {}) {
     return '上一次输出包含未提供的数据。请全部重新生成，只能使用"可引用数据"中的数字；不要解释，只输出指定 JSON。';
   }
   if (failure.reason === 'ai_flavor') {
+    if (failure.ai && failure.ai.rule === 'time_slot_mismatch') {
+      return '文案出现了时段违和词汇（如上午出现"下班"或晚间词汇）。当前为上午时段，文案若涉及生活作息请写上班/上学通勤或晨间打气，严禁使用"下班/放学回家/晚安"等词。不要解释，只输出指定 JSON。';
+    }
     const detail = (failure.ai && failure.ai.detail) || '句式雷同/口号化';
     return `上一次文案有 AI 腔（${detail}）。请全部重新生成：拆散句式、减少感叹号、让 ${lineCount} 条文案的角度和开头都不一样、每条不少于 ${lineMinChars} 个字、去掉口号式总结；不要解释，只输出指定 JSON。`;
   }

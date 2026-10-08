@@ -14,6 +14,44 @@ function hashValue(value, salt = '') {
   return createHash('sha256').update(`${salt}:${value}`).digest('hex');
 }
 
+function getTimeSlot(now = new Date()) {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Shanghai',
+    hour: 'numeric',
+    minute: 'numeric',
+    hourCycle: 'h23',
+  });
+  const parts = Object.fromEntries(formatter.formatToParts(now).map((part) => [part.type, part.value]));
+  const hour = parseInt(parts.hour, 10);
+  const minute = parts.minute;
+  let slot = 'morning';
+  let slotLabel = '早晨/上午';
+  let promptHint = '当前为早晨/上午时段（06:00-12:00）。文案若涉及粉丝生活作息，优先写上班/上学通勤、晨间打气、开启新一天；严禁写"下班""放学回家""晚安"等下半天/晚间场景。';
+
+  if (hour >= 18) {
+    slot = 'evening';
+    slotLabel = '傍晚/晚间';
+    promptHint = '当前为晚间时段（18:00后）。文案若涉及粉丝生活作息，可自然写下班路上、放学回家、晚饭后超话冒泡、睡前陪伴等。';
+  } else if (hour >= 12) {
+    slot = 'afternoon';
+    slotLabel = '午间/下午';
+    promptHint = '当前为午后时段（12:00-18:00）。文案若涉及粉丝生活作息，可自然写午休摸鱼、下午茶、午后日常打气；不宜写清晨早起或深夜晚安。';
+  } else if (hour < 6) {
+    slot = 'night';
+    slotLabel = '深夜/凌晨';
+    promptHint = '当前为深夜/凌晨时段（00:00-06:00）。文案若涉及粉丝生活作息，可写夜猫子、深夜随笔、早点休息、互道晚安；不写通勤、上班打卡。';
+  }
+
+  return {
+    hour,
+    minute,
+    timeLabel: `${String(hour).padStart(2, '0')}:${minute}`,
+    slot,
+    slotLabel,
+    promptHint,
+  };
+}
+
 function shanghaiDate(now = new Date()) {
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Shanghai',
@@ -25,7 +63,13 @@ function shanghaiDate(now = new Date()) {
     const parts = Object.fromEntries(formatter.formatToParts(value).map((part) => [part.type, part.value]));
     return `${parts.year}-${parts.month}-${parts.day}`;
   };
-  return { date: format(now), yesterday: format(new Date(now.getTime() - DAY_MS)) };
+  const timeSlot = getTimeSlot(now);
+  return {
+    date: format(now),
+    yesterday: format(new Date(now.getTime() - DAY_MS)),
+    hour: timeSlot.hour,
+    timeSlot,
+  };
 }
 
 function normalizeClientId(value) {
@@ -112,6 +156,7 @@ function formatBjTime(startTs) {
 module.exports = {
   hashValue,
   shanghaiDate,
+  getTimeSlot,
   normalizeClientId,
   isValidClientId,
   normalizeRequestId,

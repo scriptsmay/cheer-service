@@ -311,6 +311,13 @@ describe('buildSystemPrompt — 多样性上下文注入', () => {
     const prompt = buildSystemPrompt('daily', sourceCareer, 'career', {});
     assert.ok(!prompt.includes('今日背景'));
   });
+
+  test('timeSlot 注入时段指引', () => {
+    const morningSlot = { timeLabel: '07:30', slotLabel: '早晨/上午', promptHint: '当前为早晨/上午时段（06:00-12:00）。优先写上班/上学通勤；严禁写"下班"' };
+    const prompt = buildSystemPrompt('daily', sourceCareer, 'career', { timeSlot: morningSlot });
+    assert.ok(prompt.includes('时段指引（07:30 早晨/上午）'));
+    assert.ok(prompt.includes('严禁写"下班"'));
+  });
 });
 
 // ════════════════════════════════════════════════════════════════
@@ -395,6 +402,37 @@ describe('checkAiFlavor — 反 AI 味规则（5 条基准）', () => {
       null
     );
   });
+
+  test('时段违和拦截：上午时段严禁下班/放学回家/晚安', () => {
+    const morningOpts = { timeSlot: { slot: 'morning', hour: 8 } };
+    assert.strictEqual(
+      checkAiFlavor(['下班刷到超话就进来冒个泡，今天训练顺利吗', '为你加油', '好好休息', '翻翻旧录像', '日常打气'], morningOpts)?.rule,
+      'time_slot_mismatch'
+    );
+    assert.strictEqual(
+      checkAiFlavor(['今天下班回家第一件事就是翻超话', '为你加油', '好好休息', '翻翻旧录像', '日常打气'], morningOpts)?.rule,
+      'time_slot_mismatch'
+    );
+    assert.strictEqual(
+      checkAiFlavor(['放学回家看到训练赛消息太开心了', '为你加油', '好好休息', '翻翻旧录像', '日常打气'], morningOpts)?.rule,
+      'time_slot_mismatch'
+    );
+    assert.strictEqual(
+      checkAiFlavor(['睡前互道晚安，明天继续加油', '为你加油', '好好休息', '翻翻旧录像', '日常打气'], morningOpts)?.rule,
+      'time_slot_mismatch'
+    );
+    // 上午通勤/开工应放行
+    assert.strictEqual(
+      checkAiFlavor(['上班路上刷到超话冒个泡，今天训练顺利吗', '为你加油', '好好休息', '翻翻旧录像', '日常打气'], morningOpts),
+      null
+    );
+    // 晚上允许下班
+    const eveningOpts = { timeSlot: { slot: 'evening', hour: 19 } };
+    assert.strictEqual(
+      checkAiFlavor(['下班刷到超话就进来冒个泡，今天训练顺利吗', '为你加油', '好好休息', '翻翻旧录像', '日常打气'], eveningOpts),
+      null
+    );
+  });
 });
 
 describe('inspectGeneratedOutput — 条数与 ai_flavor 校验接入', () => {
@@ -450,6 +488,24 @@ describe('inspectGeneratedOutput — 条数与 ai_flavor 校验接入', () => {
     const result = inspectGeneratedOutput(output, EMPTY_SOURCE, { humanize: true });
     assert.strictEqual(result.reason, 'ungrounded_number', '未提供的数据应先拦截');
   });
+
+  test('上午时段输出包含下班时被 inspectGeneratedOutput 拦截为 ai_flavor (time_slot_mismatch)', () => {
+    const lines = [
+      '下班刷到超话就进来冒个泡，今天训练顺利吗',
+      '等你回来的每一天都有在认真生活',
+      '今天喝到了好喝的奶茶，突然想到你',
+      '翻出去年夏天的比赛录像又看了一遍',
+      '日常散步的时候在超话刷到你的图',
+    ];
+    const res = inspectGeneratedOutput(
+      { lines, emoji_caption: '加油' },
+      EMPTY_SOURCE,
+      { humanize: true, timeSlot: { slot: 'morning', hour: 7 } }
+    );
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.reason, 'ai_flavor');
+    assert.strictEqual(res.ai.rule, 'time_slot_mismatch');
+  });
 });
 
 describe('CHEER_LINE_COUNT 与 prompt / 重试文案一致性', () => {
@@ -481,6 +537,7 @@ describe('CHEER_LINE_COUNT 与 prompt / 重试文案一致性', () => {
     assert.ok(retryLen.includes(`${CHEER_LINE_COUNT} 条文案的字符数`));
     assert.ok(retryLen.includes(`每条不少于 ${CHEER_LINE_MIN_CHARS} 个字`), 'line_length 重试应带 20 字下限');
     assert.ok(buildRetryInstruction({ reason: 'ai_flavor', ai: { detail: '句式雷同' } }).includes(`让 ${CHEER_LINE_COUNT} 条文案`));
+    assert.ok(buildRetryInstruction({ reason: 'ai_flavor', ai: { rule: 'time_slot_mismatch' } }).includes('时段违和词汇'));
     const retryDefault = buildRetryInstruction({});
     assert.ok(retryDefault.includes(`恰好 ${CHEER_LINE_COUNT} 条`));
     assert.ok(retryDefault.includes(`每条不少于 ${CHEER_LINE_MIN_CHARS} 个字`));
