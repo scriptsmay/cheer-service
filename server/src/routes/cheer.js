@@ -624,8 +624,24 @@ function buildGroundedSource(overview, mode = 'season') {
   const heroLabel = '常用英雄（按出场数）';
   const heroSummary = heroes.filter((item) => isObject(item) && typeof item.hero_name === 'string' && item.hero_name).slice(0, 5).map(formatHeroSummary).join('、');
   addRef(refs, heroLabel, heroSummary, 'season_summaries');
-  // 只保留前 6 条数据，避免 prompt 太长
-  const trimmedRefs = refs.slice(0, 6);
+  // 最近一场战报注入：给"赛况向/回忆杀"文案提供具体弹药——对手、比分、每局英雄/KDA/MVP。
+  // 缺赛期（career 模式）同样注入：属于"回望生涯高光"，不违反缺赛约束。
+  const recentMatches = Array.isArray(data.recent_matches) ? data.recent_matches : [];
+  const latest = recentMatches.find((m) => m && Array.isArray(m.battles_by_bo) && m.battles_by_bo.length);
+  if (latest) {
+    const games = latest.battles_by_bo
+      .filter((g) => g && typeof g.hero_name === 'string' && g.hero_name)
+      .map((g) => `${g.hero_name}${g.kda ? ` ${g.kda}` : ''}${g.is_mvp ? '（MVP）' : ''}`)
+      .join('、');
+    if (games) {
+      const datePart = latest.match_date || '';
+      const vsPart = latest.opponent_team_name ? ` vs ${latest.opponent_team_name}` : '';
+      const scorePart = latest.match_score ? ` ${latest.match_score}${latest.match_is_win === true ? '胜' : (latest.match_is_win === false ? '负' : '')}` : '';
+      addRef(refs, '最近一场战报', `${datePart}${vsPart}${scorePart}：${games}`, 'recent_matches');
+    }
+  }
+  // 只保留前 7 条数据，避免 prompt 太长
+  const trimmedRefs = refs.slice(0, 7);
   // career 口径下 overview.updated_at 只代表 season_summaries 文档刷新时间，
   // 不等于生涯数据的截止时间，改用 career_summary 自带时间，没有则留空避免误导
   const rawSnapshotAt = seasonStats
@@ -662,14 +678,16 @@ const DEFAULT_PROMPT = `
 
 粉圈词不是必选项。可以按语境偶尔使用"同担""守护""冲冲冲""杀回来"等表达，但每个词在整次输出中最多出现一次；没有合适语境时就不用。优先通过自然的语气和节奏体现粉丝氛围。
 
-多条文案要从不同角度表达期待、鼓励、陪伴、认可或热血感，句式和开头不能雷同。避免套话、口号堆叠、连续感叹号，以及每句都称呼选手或粉丝群体。
+每条文案必须围绕一个具体观点展开（例如：对抗路这个位置的价值、他某场比赛的具体表现、他的某项特质如稳定/大心脏/反差感），观点先行、情绪跟上；禁止没有观点的纯情绪句和纯口号句。句式和开头不能雷同。多用对抗路行话：对线、兵线、换血、承伤、开团、进场、单带、TP、牵制。
 
-只允许引用下方"可引用数据"中明确提供的具体数字、百分比和英雄名；没有提供的数据不得猜测或补充。数据按语境自然选用即可，不要为了塞数据牺牲口语感。五条文案中最多三条引用数据，至少两条完全不引用数据、只表达自然情绪。
+已知事实（可引用）：无言获 KPL 春季赛最佳阵容一阵（对抗路）。
+
+只允许引用下方"可引用数据"中明确提供的具体数字、百分比、英雄名、对手名与比赛日期比分；没有提供的数据不得猜测或补充。数字只能出现在支撑观点的从句里，不许单独成句、不许开头即数据；荣誉类表述优先于裸数据。{{line_count}} 条中至少两条完全不引用数字。
 所有数字必须使用阿拉伯数字（如 4.29、56.7%、28局），禁止使用中文数字（如四點二九、五十六点七、二十八局）。
 
 必须输出 {{line_count}} 条中文短句，每条必须不少于 {{line_min_chars}} 个字，并尽量写到 30 至 50 字；另输出一句简短的 emoji_caption。emoji_caption 也要自然，不要复述短句。
 
-不得使用传统球类运动词汇，不得声称单场 MVP、本周表现或未提供的赛程结果。
+不得使用传统球类运动词汇。不得声称"可引用数据"之外的单场 MVP、本周表现或赛程结果；"可引用数据"中明确标注的单场 MVP 与比赛结果可以引用。
 
 参考自然程度，不要照抄：
 - 今天也期待你的下一次亮相。
@@ -703,6 +721,7 @@ const OFFSEASON_CONSTRAINT_ASIAN_GAMES = `
 // 留代码红线：措辞不可后台改，但条数口径随生效配置动态渲染，防条数调整后文案漂移
 const HUMANIZE_GUIDE = `
 避免 AI 腔：禁止排比三连句式（"不只是…更是…"）、禁止连续感叹号（最多一个）、禁止抽象词堆叠（梦想/热爱/永远/信念 每词整次输出最多一次）、禁止句式同构（{{line_count}} 条文案开头雷同）、禁止口号式收尾（每句都是正能量总结）。
+要有人味：每条必须包含一个具体细节（三选一：英雄名、具体比赛场合、对抗路位置术语）；允许反问句和直接与读者对话的句式（如"还记得…吗？""刚入坑不知道先看谁？"）；结尾收在画面或感受上，不要每句都正能量总结；称呼可以变化（无言/小无言/言言），不要连续多条用同一个称呼。
 像粉丝真的在打字：有停顿、有细节、允许一点点随意，不要每句都像精心设计的金句。时间真实感：文案若带生活作息细节，必须严格符合当前时段（上午写晨间/通勤/开工，严禁在上午写"下班/回家"；下午 18:00 后才写下班/晚间放松；没有合适语境就纯写应援，不要生硬拼凑）。
 `;
 
