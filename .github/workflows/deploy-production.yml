@@ -1,0 +1,57 @@
+name: Deploy Production
+
+# Vercel 的原生 Git 构建会跳过「代码树与上次构建相同」的提交（纯 merge 提交即属此类），
+# 导致合入 PR 后生产环境不更新。本 workflow 用 Deploy Hook 强制每次 main 推送都产出生产部署。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy-hook:
+    name: Trigger Vercel production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: POST deploy hook
+        env:
+          DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DEPLOY_HOOK_URL:-}" ]; then
+            echo "::error::Repository secret VERCEL_DEPLOY_HOOK_URL is not set (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+
+          body="$(mktemp)"
+          code=000
+          for attempt in 1 2 3; do
+            code="$(curl -sS -o "$body" -w '%{http_code}' --max-time 60 -X POST "$DEPLOY_HOOK_URL" || true)"
+            if [ "$code" = "200" ] || [ "$code" = "201" ] || [ "$code" = "202" ]; then
+              break
+            fi
+            echo "attempt ${attempt}: HTTP ${code} — $(head -c 300 "$body")"
+            if [ "$attempt" = "3" ]; then
+              echo "::error::Deploy hook did not accept the request (HTTP ${code})."
+              exit 1
+            fi
+            sleep $((attempt * 10))
+          done
+
+          job_id="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("job",{}).get("id") or "")' "$body")"
+          if [ -z "$job_id" ]; then
+            echo "::error::Deploy hook returned no job id: $(head -c 300 "$body")"
+            exit 1
+          fi
+
+          echo "Vercel build job queued: ${job_id}"
+          echo "Track it in the Vercel project dashboard (deployments marked as triggered by hook 'production-main')."
