@@ -7,3 +7,4 @@ data/export/
 .workbuddy/
 .DS_Store
 *.bak
+.vercel
