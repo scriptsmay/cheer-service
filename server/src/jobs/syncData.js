@@ -10,6 +10,7 @@
 const { collection } = require('../db');
 const crypto = require('crypto');
 const kplSource = require('../lib/kpl-source');
+const { normalizeAbilities } = require('../lib/kpl-abilities');
 
 async function syncData() {
   const results = { season: null, synced: [], skipped: [], errors: [] };
@@ -43,6 +44,28 @@ async function syncData() {
       overview.hero_top = heroTop;
     }
 
+    // 3.5 读取选手能力评分：失败/不匹配时省略字段，合并写会保留上次数值
+    let abilities = null;
+    try {
+      const payload = await kplSource.readKplJson(`data/derived/${season}/abilities.json`);
+      if (!payload) {
+        results.skipped.push('abilities.json');
+      } else {
+        abilities = normalizeAbilities(payload, {
+          season,
+          playerName: playerInfo.latest_nickname,
+          teamName: playerInfo.latest_team,
+        });
+        if (!abilities) {
+          console.warn(`[sync] abilities skipped: no matching player/season for ${season}`);
+          results.skipped.push('abilities.json');
+        }
+      }
+    } catch (e) {
+      console.warn(`[sync] abilities read failed (skip, keep last known): ${e.message}`);
+      results.skipped.push('abilities.json');
+    }
+
     // 4. Upsert season_summaries
     const summaryDoc = {
       season,
@@ -50,6 +73,7 @@ async function syncData() {
       player_name: playerInfo.latest_nickname || 'unknown',
       team_name: playerInfo.latest_team || 'unknown',
       data: overview,
+      ...(abilities ? { abilities } : {}),
       updated_at: new Date().toISOString(),
     };
     const col = await collection('season_summaries');

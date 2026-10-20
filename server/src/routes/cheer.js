@@ -16,6 +16,7 @@ const { getCheerSettings, getActiveEventsForDate } = require('../services/settin
 const { getDateContext } = require('../lib/date-context');
 const { makeCheckinId } = require('../utils/checkin-summary');
 const { renderTemplate, DEFAULT_PROMPTS } = require('../lib/prompt-template');
+const { buildAbilityRefs } = require('../lib/kpl-abilities');
 const {
   getRequestId, getClientIp, shanghaiDate, getTimeSlot, normalizeClientId,
   isValidClientId, normalizeRequestId, hashValue, formatRate,
@@ -616,6 +617,10 @@ function buildGroundedSource(overview, mode = 'season') {
   const heroes = Array.isArray(data.hero_stats) ? [...data.hero_stats] : [];
   heroes.sort((a, b) => Number((b && b.battles) || 0) - Number((a && a.battles) || 0));
   const refs = [];
+  // abilities 是赛季维度：仅赛季口径 + 赛季一致时引用；career/emotion 不注入
+  if (seasonStats && isObject(overview.abilities) && overview.abilities.season === seasonId) {
+    for (const ref of buildAbilityRefs(overview.abilities)) refs.push(ref);
+  }
   addRef(refs, `${statsLabel} KDA`, stats.kda_ratio, 'season_summaries');
   addRef(refs, `${statsLabel}胜率`, formatRate(stats.win_rate), 'season_summaries');
   addRef(refs, `${statsLabel}对局数`, stats.battles ?? stats.total_battles, 'season_summaries');
@@ -640,8 +645,8 @@ function buildGroundedSource(overview, mode = 'season') {
       addRef(refs, '最近一场战报', `${datePart}${vsPart}${scorePart}：${games}`, 'recent_matches');
     }
   }
-  // 只保留前 7 条数据，避免 prompt 太长
-  const trimmedRefs = refs.slice(0, 7);
+  // 只保留前 9 条数据（原 7 条 + abilities 2 条），避免 prompt 太长
+  const trimmedRefs = refs.slice(0, 9);
   // career 口径下 overview.updated_at 只代表 season_summaries 文档刷新时间，
   // 不等于生涯数据的截止时间，改用 career_summary 自带时间，没有则留空避免误导
   const rawSnapshotAt = seasonStats
@@ -682,8 +687,9 @@ const DEFAULT_PROMPT = `
 
 已知事实（可引用）：无言获 KPL 春季赛最佳阵容一阵（对抗路）。
 
-只允许引用下方"可引用数据"中明确提供的具体数字、百分比、英雄名、对手名与比赛日期比分；没有提供的数据不得猜测或补充。数字只能出现在支撑观点的从句里，不许单独成句、不许开头即数据；荣誉类表述优先于裸数据。{{line_count}} 条中至少两条完全不引用数字。
+只允许引用下方"可引用数据"中明确提供的具体数字、百分比、评分、排名、英雄名、对手名与比赛日期比分；没有提供的数据不得猜测或补充。数字只能出现在支撑观点的从句里，不许单独成句、不许开头即数据；荣誉类表述优先于裸数据。{{line_count}} 条中至少两条完全不引用数字。
 所有数字必须使用阿拉伯数字（如 4.29、56.7%、28局），禁止使用中文数字（如四點二九、五十六点七、二十八局）。
+"可引用数据"中的评分与排名可以自然引用（如综合评分、全联盟第1、对抗路第1），但必须保持原口径：对抗路分榜第1不能说成全联盟第1，不得改写名次，也不得推断未提供的排名（如"所有分项都第一""断层第一""历史最强"）。排名句同样不许单独成句或作为开头。
 
 必须输出 {{line_count}} 条中文短句，每条必须不少于 {{line_min_chars}} 个字，并尽量写到 30 至 50 字；另输出一句简短的 emoji_caption。emoji_caption 也要自然，不要复述短句。
 

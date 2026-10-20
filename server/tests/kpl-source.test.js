@@ -118,6 +118,29 @@ describe('kpl-source · local 模式', () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
+  test('checkChanged：只有 abilities.json 更新时也触发同步', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kpl-src-'));
+    const season = 'KPL2026S2';
+    const target = path.join(dir, 'data', 'derived', season, 'abilities.json');
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, '{}');
+
+    const source = createKplSource({ source: 'local', localDir: dir, logger: silentLogger });
+    const result = await source.checkChanged(season, { timestampMs: 0, etags: {} });
+    assert.strictEqual(result.changed, true, 'abilities.json 应纳入变更检测');
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  test('trackedFiles 覆盖 overview / schedule / abilities', () => {
+    const source = createKplSource({ source: 'local', localDir: '/tmp', logger: silentLogger });
+    assert.deepStrictEqual(source.trackedFiles('KPL2026S2'), [
+      path.join('data', 'derived', 'KPL2026S2', 'overview.json'),
+      path.join('data', 'derived', 'KPL2026S2', 'schedule.json'),
+      path.join('data', 'derived', 'KPL2026S2', 'abilities.json'),
+    ]);
+  });
+
   test('describeSource 输出 local 前缀路径', () => {
     const source = createKplSource({ source: 'local', localDir: '/app/kpl-data-daily', logger: silentLogger });
     assert.match(source.describeSource('data/derived/KPL2026S2/overview.json'), /^local:.*overview\.json$/);
@@ -168,20 +191,25 @@ describe('kpl-source · github 模式', () => {
     const overviewEtag = 'W/"aaa"';
     const scheduleEtag = 'W/"bbb"';
 
+    const abilitiesEtag = 'W/"ccc"';
+
     // 第一轮：无状态 → 全量 200，应判定有变更并记录 ETag
     const firstFetch = scriptedFetch([
       { match: 'overview.json', reply: fakeResponse(200, { body: '{}', etag: overviewEtag }) },
       { match: 'schedule.json', reply: fakeResponse(200, { body: '{}', etag: scheduleEtag }) },
+      { match: 'abilities.json', reply: fakeResponse(200, { body: '{}', etag: abilitiesEtag }) },
     ]);
     const source = createKplSource({ source: 'github', rawBase: RAW_BASE, fetchImpl: firstFetch, logger: silentLogger });
     const first = await source.checkChanged(season, null);
     assert.strictEqual(first.changed, true);
     assert.strictEqual(first.state.etags[path.join('data', 'derived', season, 'overview.json')], overviewEtag);
+    assert.strictEqual(first.state.etags[path.join('data', 'derived', season, 'abilities.json')], abilitiesEtag);
 
     // 第二轮：携带 ETag → 304，应判定未变更
     const sameEtagFetch = scriptedFetch([
       { match: 'overview.json', reply: fakeResponse(304, { etag: overviewEtag }) },
       { match: 'schedule.json', reply: fakeResponse(304, { etag: scheduleEtag }) },
+      { match: 'abilities.json', reply: fakeResponse(304, { etag: abilitiesEtag }) },
     ]);
     const sourceSame = createKplSource({
       source: 'github', rawBase: RAW_BASE, fetchImpl: sameEtagFetch, logger: silentLogger,
@@ -194,6 +222,7 @@ describe('kpl-source · github 模式', () => {
     const changedFetch = scriptedFetch([
       { match: 'overview.json', reply: fakeResponse(200, { body: '{}', etag: 'W/"new"' }) },
       { match: 'schedule.json', reply: fakeResponse(304, { etag: scheduleEtag }) },
+      { match: 'abilities.json', reply: fakeResponse(304, { etag: abilitiesEtag }) },
     ]);
     const sourceChanged = createKplSource({
       source: 'github', rawBase: RAW_BASE, fetchImpl: changedFetch, logger: silentLogger,

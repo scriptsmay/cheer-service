@@ -74,6 +74,7 @@ function createKplSource(options = {}) {
     return [
       path.join('data', 'derived', season, 'overview.json'),
       path.join('data', 'derived', season, 'schedule.json'),
+      path.join('data', 'derived', season, 'abilities.json'),
     ];
   }
 

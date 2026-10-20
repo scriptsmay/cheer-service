@@ -13,15 +13,35 @@ const { __test } = require('../src/routes/cheer');
 const {
   buildGroundedSource,
   buildSystemPrompt,
+  inspectGeneratedOutput,
   mapStreamErrorCode,
   createStreamRequestObserver,
   createRouteDeadline,
 } = __test;
 
 // 模拟一份 season_summaries 文档：既有当前赛季 season_stats，也有生涯 career_summary
+const ABILITIES = {
+  season: 'KPL2026S2',
+  player_name: 'KSG.无言',
+  team_name: 'KSG',
+  position: '对抗路',
+  overall_rating: 93.7,
+  overall_rank: 1,
+  position_rank: 1,
+  dimensions: {
+    support_ability: { score: 97, overall_rank: 11, position_rank: 1 },
+    tankiness: { score: 97, overall_rank: 13, position_rank: 5 },
+    mid_game: { score: 95, overall_rank: 7, position_rank: 4 },
+    initiation: { score: 94, overall_rank: 13, position_rank: 1 },
+    early_game: { score: 88, overall_rank: 8, position_rank: 1 },
+    map_control: { score: 90, overall_rank: 3, position_rank: 1 },
+  },
+};
+
 const OVERVIEW = {
   season: 'KPL2026S2',
   updated_at: '2026-08-01T00:00:00.000Z',
+  abilities: ABILITIES,
   data: {
     data: {
       season_stats: [
@@ -65,6 +85,59 @@ describe('buildGroundedSource — 数据模式分支', () => {
   test('无 overview 时退化为空数据', () => {
     const source = buildGroundedSource(null, 'season');
     assert.strictEqual(source.refs.length, 0);
+  });
+
+  test('season 模式注入 abilities 综合评分与分榜第1分项', () => {
+    const source = buildGroundedSource(OVERVIEW, 'season');
+    assert.deepStrictEqual(source.refs.slice(0, 2), [
+      { label: '联盟综合评分', value: '93.7（全联盟第1，对抗路第1）', source: 'season_summaries' },
+      { label: '对抗路分榜第1能力', value: '支援97、开团94、地图控制90、前期88', source: 'season_summaries' },
+    ]);
+    assert.ok(source.promptLines[0].startsWith('联盟综合评分：93.7'), 'abilities 应排在最前');
+  });
+
+  test('career / emotion 模式不注入 abilities', () => {
+    for (const mode of ['career', 'emotion']) {
+      const labels = buildGroundedSource(OVERVIEW, mode).refs.map((r) => r.label);
+      assert.ok(!labels.includes('联盟综合评分'), `${mode} 不应引用综合评分`);
+      assert.ok(!labels.includes('对抗路分榜第1能力'), `${mode} 不应引用分榜能力`);
+    }
+  });
+
+  test('abilities 赛季与 overview 不一致时不注入', () => {
+    const stale = { ...OVERVIEW, abilities: { ...ABILITIES, season: 'KPL2026S1' } };
+    const labels = buildGroundedSource(stale, 'season').refs.map((r) => r.label);
+    assert.ok(!labels.includes('联盟综合评分'));
+  });
+
+  test('prompt 放行排名表述并保留可引用数据', () => {
+    const source = buildGroundedSource(OVERVIEW, 'season');
+    const prompt = buildSystemPrompt('daily', source, 'season', {});
+    assert.ok(prompt.includes('可引用数据：联盟综合评分：93.7（全联盟第1，对抗路第1）'));
+    assert.ok(prompt.includes('对抗路分榜第1不能说成全联盟第1'), '应含排名口径约束');
+  });
+
+  test('校验层放行 93.7 / 第1，拒绝编造评分', () => {
+    const source = buildGroundedSource(OVERVIEW, 'season');
+    const opts = { line_count: 2, humanize: false };
+    const ok = inspectGeneratedOutput({
+      lines: [
+        '联盟综合评分93.7全联盟第1，这场对抗路的含金量还在涨。',
+        '对抗路分榜第1的支援97，团战里总能把节奏接住。',
+      ],
+      emoji_caption: '继续冲',
+    }, source, opts);
+    assert.strictEqual(ok.ok, true);
+
+    const bad = inspectGeneratedOutput({
+      lines: [
+        '联盟综合评分95.2全联盟第1，这场对抗路的含金量还在涨。',
+        '对抗路分榜第1的支援97，团战里总能把节奏接住。',
+      ],
+      emoji_caption: '继续冲',
+    }, source, opts);
+    assert.strictEqual(bad.ok, false);
+    assert.strictEqual(bad.reason, 'ungrounded_number');
   });
 });
 

@@ -62,7 +62,7 @@ async function main() {
   }
 
   // 读取 AI 配置（优先 ai-config.json → 环境变量，CLI 参数可覆盖）
-  const aiConfig = getEffectiveConfig();
+  const aiConfig = await getEffectiveConfig();
   const baseUrl = options.baseUrl || aiConfig.baseUrl;
   const apiKey = options.apiKey || aiConfig.apiKey;
   const model = options.model || aiConfig.model;
@@ -216,7 +216,7 @@ async function main() {
 
 // ── 构造带覆写的 generateText 函数 ──
 async function createGenerateText(override) {
-  // 直接内联实现，不依赖 ai.js 中的 AbortSignal.timeout（增加超时到 60s）
+  // 直接内联实现，不依赖 ai.js 中的 AbortSignal.timeout（增加超时到 180s）
   const { baseUrl, apiKey, model } = override;
 
   return async function ({ messages, temperature = 0.85, jsonMode = false }) {
@@ -230,7 +230,7 @@ async function createGenerateText(override) {
         'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(60000), // 60s 超时，preview 场景给足够时间
+      signal: AbortSignal.timeout(180000), // 180s 超时，preview 场景给足够时间
     });
 
     if (!response.ok) {
