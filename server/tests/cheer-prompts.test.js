@@ -24,6 +24,7 @@ const { __test } = require('../src/routes/cheer');
 const {
   buildSystemPrompt, inspectGeneratedOutput, buildRetryInstruction,
   extractOpening, dedupeOpenings, getRecentOpenings, assignRoles, buildUserPrompt,
+  findBallSportsTerms,
 } = __test;
 
 // ════════════════════════════════════════════════════════════════
@@ -603,5 +604,77 @@ describe('assignRoles — 角色分工', () => {
     const broken = buildUserPrompt('daily', '9月顺利，加油', source, [], { user_text_hint: '坏 {{user_text}} {{who}}' });
     assert.ok(broken.includes('用户补充是用户此刻想传达的话'));
     assert.ok(!broken.includes('{{who}}'));
+  });
+});
+
+// ════════════════════════════════════════════════════════════
+// 6. 球类词汇拦截：prompt 禁令的代码兜底
+//    「不得使用传统球类运动词汇」原先只有 prompt 一句话、无校验层，模型漏嘴即透传；
+//    现由 BALL_SPORTS_TERMS + inspectGeneratedOutput + buildRetryInstruction 三层同构拦截。
+// ════════════════════════════════════════════════════════════
+
+describe('球类词汇拦截 — prompt 禁令代码兜底', () => {
+  const EMPTY_SOURCE = { refs: [], promptLines: [] };
+  // 合法电竞词汇对照组：赛季/胜率/开团/赛场/比赛等不得误杀
+  const ESPORTS_FIVE = [
+    '这个赛季你的胜率还是那么顶，看得安心',
+    '超话都在刷昨晚那波开团，真的帅',
+    '等你下次上场，赛场见呀朋友们',
+    '翻出去年夏天的比赛录像又看了一遍',
+    '晚饭后散步的时候在超话刷到你的图',
+  ];
+
+  test('findBallSportsTerms：命中词按词表顺序返回，空输入返回空数组', () => {
+    assert.deepStrictEqual(findBallSportsTerms(['今天一定要带队赢球呀', '球迷都在喊']), ['赢球', '球迷']);
+    assert.deepStrictEqual(findBallSportsTerms([]), []);
+    assert.deepStrictEqual(findBallSportsTerms(['这个赛季胜率真高，赛场见', null, 42]), []);
+  });
+
+  test('inspectGeneratedOutput：命中球类词汇 → ball_sports_vocab 拒绝并带回命中词', () => {
+    const result = inspectGeneratedOutput(
+      { lines: ['今天这场比赛一定要带队赢球呀', ...ESPORTS_FIVE.slice(1)], emoji_caption: 'x' },
+      EMPTY_SOURCE,
+      {}
+    );
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.kind, 'invalid_output');
+    assert.strictEqual(result.reason, 'ball_sports_vocab');
+    assert.deepStrictEqual(result.terms, ['赢球']);
+  });
+
+  test('inspectGeneratedOutput：emoji_caption 命中同样拒绝', () => {
+    const result = inspectGeneratedOutput(
+      { lines: [...ESPORTS_FIVE], emoji_caption: '今天一起赢球！' },
+      EMPTY_SOURCE,
+      {}
+    );
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.reason, 'ball_sports_vocab');
+    assert.deepStrictEqual(result.terms, ['赢球']);
+  });
+
+  test('inspectGeneratedOutput：合法电竞词汇不误杀（对照组）', () => {
+    const result = inspectGeneratedOutput({ lines: [...ESPORTS_FIVE], emoji_caption: '并肩前行' }, EMPTY_SOURCE, {});
+    assert.strictEqual(result.ok, true);
+  });
+
+  test('buildRetryInstruction：ball_sports_vocab 带回命中词并给电竞替代说法', () => {
+    const retry = buildRetryInstruction({ reason: 'ball_sports_vocab', terms: ['赢球', '球迷'] });
+    assert.ok(retry.includes('赢球、球迷'), '应列出命中词');
+    assert.ok(retry.includes('电竞'), '应引导换电竞说法');
+    assert.ok(retry.includes('赢下这局'), '应给出替代表达');
+    // 无命中词时不出现 undefined
+    const fallback = buildRetryInstruction({ reason: 'ball_sports_vocab', terms: [] });
+    assert.ok(!fallback.includes('undefined'));
+    assert.ok(fallback.includes('球类词汇'));
+  });
+
+  test('DEFAULT_PROMPT：球类词汇禁令具体化（示例词 + 替代说法）', () => {
+    const prompt = buildSystemPrompt('daily', EMPTY_SOURCE, 'season', {});
+    assert.ok(prompt.includes('严禁使用任何传统球类运动词汇'), '禁令应保留并加严');
+    assert.ok(prompt.includes('“赢球”'), '应含示例词赢球');
+    assert.ok(prompt.includes('“球迷”'), '应含示例词球迷');
+    assert.ok(prompt.includes('换成电竞说法'), '应给替代指引');
+    assert.ok(prompt.includes('不是球类赛事播报'), '应点明语境错位');
   });
 });

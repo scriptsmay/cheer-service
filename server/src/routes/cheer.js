@@ -687,7 +687,7 @@ const DEFAULT_PROMPT = `
 
 必须输出 {{line_count}} 条中文短句，每条必须不少于 {{line_min_chars}} 个字，并尽量写到 30 至 50 字；另输出一句简短的 emoji_caption。emoji_caption 也要自然，不要复述短句。
 
-不得使用传统球类运动词汇。不得声称"可引用数据"之外的单场 MVP、本周表现或赛程结果；"可引用数据"中明确标注的单场 MVP 与比赛结果可以引用。
+严禁使用任何传统球类运动词汇（例如“赢球”“输球”“进球”“球场”“球赛”“球迷”“球队”“点球”“射门”“红牌”“黄牌”等）：这是电竞应援文案，不是球类赛事播报。需要表达同类意思时一律换成电竞说法（赢下这局、拿下、胜利、赛场、粉丝、战队、开局、团战）。不得声称“可引用数据”之外的单场 MVP、本周表现或赛程结果；“可引用数据”中明确标注的单场 MVP 与比赛结果可以引用。
 
 参考自然程度，不要照抄：
 - 今天也期待你的下一次亮相。
@@ -856,6 +856,11 @@ function inspectGeneratedOutput(output, source, opts = {}) {
       return { ok: false, kind: 'invalid_output', reason: 'repeat_opening', opening };
     }
   }
+  // 传统球类运动词汇（prompt 禁令的代码兜底）：命中即拒并带词重试，不透传给用户
+  const ballSportsTerms = findBallSportsTerms([...output.lines, output.emoji_caption || '']);
+  if (ballSportsTerms.length) {
+    return { ok: false, kind: 'invalid_output', reason: 'ball_sports_vocab', terms: ballSportsTerms };
+  }
   const safeOutput = { lines: output.lines, emoji_caption: output.emoji_caption || '⭐️ 并肩前行，为无言加油！' };
   if (safeOutput.lines.some(isContentBlocked) || isContentBlocked(safeOutput.emoji_caption)) {
     return { ok: false, kind: 'blocked_content', reason: 'blocked_term' };
@@ -887,6 +892,24 @@ function collectAnchorNumbers(ctx, source) {
   collect(ctx && ctx.eventPhase);
   collect(source && source.refs);
   return [...numbers];
+}
+
+// ── 传统球类运动词汇黑名单（prompt 禁令「不得使用传统球类运动词汇」的代码兜底）──
+// 该规则原先只有 system prompt 一句话、无任何校验层，模型偶发漏嘴会直接透传给用户；
+// 此处与其它禁令（ungrounded_number / ai_flavor / repeat_opening）同构补齐拦截 + 带词重试。
+// 词表只收 KPL/王者荣耀语境不存在的球类用语；合法电竞词汇（赛季/赛程/夺冠/胜率/比赛/赛场/战队等）不在列。
+const BALL_SPORTS_TERMS = [
+  '赢球', '输球', '进球', '失球', '球场', '球赛', '球迷', '球队',
+  '点球', '角球', '越位', '射门', '门将', '红牌', '黄牌', '罚球',
+  '三分球', '篮板', '扣篮', '足球', '篮球', '排球',
+];
+
+/** 返回文本中命中的传统球类运动词汇（按词表顺序，供校验拒绝与重试指令引用） */
+function findBallSportsTerms(texts) {
+  const list = Array.isArray(texts) ? texts : [texts];
+  const all = list.filter((t) => typeof t === 'string' && t).join('\n');
+  if (!all) return [];
+  return BALL_SPORTS_TERMS.filter((term) => all.includes(term));
 }
 
 // ── 反 AI 味量化规则（humanize）──
@@ -956,6 +979,10 @@ function buildRetryInstruction(failure, promptCfg = {}) {
   }
   if (failure.reason === 'repeat_opening') {
     return `上一次文案的开头「${failure.opening || '…'}」与最近用过的开头重复。请全部重新生成，换一个全新的角度与开头起笔（不要只在原开头换几个字）；不要解释，只输出指定 JSON。`;
+  }
+  if (failure.reason === 'ball_sports_vocab') {
+    const terms = (failure.terms || []).join('、') || '球类词汇';
+    return `上一次文案出现了传统球类运动词汇（${terms}）。这是电竞应援文案，请全部重新生成，把球类说法换成电竞语境表达（如用“赢下这局”“拿下”“胜利”“赛场”“粉丝”“战队”替代）；不要解释，只输出指定 JSON。`;
   }
   if (failure.kind === 'blocked_content') {
     return '上一次输出未通过内容安全检查。请全部重新生成正常、积极的粉丝应援文案；不要解释，只输出指定 JSON。';
@@ -1317,6 +1344,7 @@ module.exports.__test = {
   parseGeneratedText,
   inspectGeneratedOutput,
   checkAiFlavor,
+  findBallSportsTerms,
   collectAnchorNumbers,
   getLatestOverview,
   extractOpening,
