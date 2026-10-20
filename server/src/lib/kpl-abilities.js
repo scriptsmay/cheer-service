@@ -13,7 +13,7 @@ const DIMENSIONS = [
   { key: 'mid_game', label: '中期', displayLabel: '中期表现' },
   { key: 'initiation', label: '开团', displayLabel: '开团能力' },
   { key: 'early_game', label: '前期', displayLabel: '前期表现' },
-  { key: 'map_control', label: '地图控制', displayLabel: '场景控制' },
+  { key: 'map_control', label: '地图控制', displayLabel: '场面控制' },
   { key: 'damage_output', label: '输出', displayLabel: '输出能力' },
   { key: 'teamfight', label: '团战', displayLabel: '团战能力' },
   { key: 'economy', label: '经济', displayLabel: '经济发育' },
@@ -49,9 +49,17 @@ function matchesPlayer(record, playerName) {
 function selectRecord(payload, { season, playerName, teamName }) {
   if (!isObject(payload)) return null;
   if (payload.season && payload.season !== season) return null;
-  const records = isObject(payload.data) && Array.isArray(payload.data.data) ? payload.data.data : [];
-  const seasonRecords = records.filter((record) => isObject(record) && (!record.season || record.season === season));
-  const matched = seasonRecords.filter((record) => matchesPlayer(record, playerName));
+  const records =
+    isObject(payload.data) && Array.isArray(payload.data.data)
+      ? payload.data.data
+      : [];
+  const seasonRecords = records.filter(
+    (record) =>
+      isObject(record) && (!record.season || record.season === season),
+  );
+  const matched = seasonRecords.filter((record) =>
+    matchesPlayer(record, playerName),
+  );
   if (matched.length === 1) return matched[0];
   if (matched.length > 1 && teamName) {
     const byTeam = matched.filter((record) => record.team_name === teamName);
@@ -86,11 +94,14 @@ function normalizeAbilities(payload, { season, playerName, teamName } = {}) {
 
   return {
     season,
-    generated_at: typeof payload.generated_at === 'string' ? payload.generated_at : '',
+    generated_at:
+      typeof payload.generated_at === 'string' ? payload.generated_at : '',
     build_id: typeof payload.build_id === 'string' ? payload.build_id : '',
-    player_name: typeof record.player_name === 'string' ? record.player_name : '',
+    player_name:
+      typeof record.player_name === 'string' ? record.player_name : '',
     team_name: typeof record.team_name === 'string' ? record.team_name : '',
-    position: typeof record.player_position === 'string' ? record.player_position : '',
+    position:
+      typeof record.player_position === 'string' ? record.player_position : '',
     overall_rating: overallRating,
     overall_rank: toRank(record.overall_rank),
     position_rank: toRank(record.position_rank),
@@ -109,26 +120,35 @@ function buildAbilityRefs(abilities, { maxDims = 4 } = {}) {
   const refs = [];
   const rating = toFiniteNumber(abilities.overall_rating);
   if (rating !== null) {
-    const position = typeof abilities.position === 'string' ? abilities.position : '';
+    const position =
+      typeof abilities.position === 'string' ? abilities.position : '';
     const rankParts = [];
-    if (Number.isInteger(abilities.overall_rank)) rankParts.push(`全联盟第${abilities.overall_rank}`);
-    if (position && Number.isInteger(abilities.position_rank)) rankParts.push(`${position}第${abilities.position_rank}`);
+    if (Number.isInteger(abilities.overall_rank))
+      rankParts.push(`全联盟第${abilities.overall_rank}`);
+    if (position && Number.isInteger(abilities.position_rank))
+      rankParts.push(`${position}第${abilities.position_rank}`);
     const suffix = rankParts.length ? `（${rankParts.join('，')}）` : '';
-    refs.push({ label: '联盟综合评分', value: `${rating}${suffix}`, source: 'season_summaries' });
+    refs.push({
+      label: '联盟综合评分',
+      value: `${rating}${suffix}`,
+      source: 'season_summaries',
+    });
   }
 
-  const topDims = DIMENSIONS
-    .map(({ key, label }) => {
-      const dim = isObject(abilities.dimensions) ? abilities.dimensions[key] : null;
-      if (!isObject(dim) || dim.position_rank !== 1) return null;
-      const score = toFiniteNumber(dim.score);
-      return score === null ? null : { label, score };
-    })
+  const topDims = DIMENSIONS.map(({ key, label }) => {
+    const dim = isObject(abilities.dimensions)
+      ? abilities.dimensions[key]
+      : null;
+    if (!isObject(dim) || dim.position_rank !== 1) return null;
+    const score = toFiniteNumber(dim.score);
+    return score === null ? null : { label, score };
+  })
     .filter(Boolean)
     .sort((a, b) => b.score - a.score)
     .slice(0, maxDims);
   if (topDims.length) {
-    const position = typeof abilities.position === 'string' ? abilities.position : '';
+    const position =
+      typeof abilities.position === 'string' ? abilities.position : '';
     refs.push({
       label: position ? `${position}分榜第1能力` : '分榜第1能力',
       value: topDims.map((dim) => `${dim.label}${dim.score}`).join('、'),
@@ -147,26 +167,37 @@ function buildAbilityDisplay(abilities) {
   if (!isObject(abilities)) return null;
   const rating = toFiniteNumber(abilities.overall_rating);
   if (rating === null) return null;
-  const position = typeof abilities.position === 'string' ? abilities.position : '';
-  const fields = DIMENSIONS
-    .map(({ key, displayLabel }) => {
-      const dim = isObject(abilities.dimensions) ? abilities.dimensions[key] : null;
-      if (!isObject(dim)) return null;
-      const score = toFiniteNumber(dim.score);
-      const rank = toRank(dim.position_rank);
-      if (score === null || rank === null || rank > DISPLAY_MAX_RANK) return null;
-      return { key, label: displayLabel, score, rank };
-    })
+  const position =
+    typeof abilities.position === 'string' ? abilities.position : '';
+  const fields = DIMENSIONS.map(({ key, displayLabel }) => {
+    const dim = isObject(abilities.dimensions)
+      ? abilities.dimensions[key]
+      : null;
+    if (!isObject(dim)) return null;
+    const score = toFiniteNumber(dim.score);
+    const rank = toRank(dim.position_rank);
+    if (score === null || rank === null || rank > DISPLAY_MAX_RANK) return null;
+    return { key, label: displayLabel, score, rank };
+  })
     .filter(Boolean)
     .sort((a, b) => a.rank - b.rank || b.score - a.score);
 
   return {
     score: rating,
-    overall_rank: Number.isInteger(abilities.overall_rank) ? abilities.overall_rank : null,
+    overall_rank: Number.isInteger(abilities.overall_rank)
+      ? abilities.overall_rank
+      : null,
     position: position || null,
-    position_rank: Number.isInteger(abilities.position_rank) ? abilities.position_rank : null,
+    position_rank: Number.isInteger(abilities.position_rank)
+      ? abilities.position_rank
+      : null,
     fields,
   };
 }
 
-module.exports = { DIMENSIONS, normalizeAbilities, buildAbilityRefs, buildAbilityDisplay };
+module.exports = {
+  DIMENSIONS,
+  normalizeAbilities,
+  buildAbilityRefs,
+  buildAbilityDisplay,
+};
