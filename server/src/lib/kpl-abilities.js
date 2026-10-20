@@ -8,19 +8,21 @@
  */
 
 const DIMENSIONS = [
-  { key: 'support_ability', label: '支援' },
-  { key: 'tankiness', label: '承伤' },
-  { key: 'mid_game', label: '中期' },
-  { key: 'initiation', label: '开团' },
-  { key: 'early_game', label: '前期' },
-  { key: 'map_control', label: '地图控制' },
-  { key: 'damage_output', label: '输出' },
-  { key: 'teamfight', label: '团战' },
-  { key: 'economy', label: '经济' },
-  { key: 'late_game', label: '后期' },
-  { key: 'durability', label: '生存' },
-  { key: 'invasion_ability', label: '入侵' },
+  { key: 'support_ability', label: '支援', displayLabel: '支援能力' },
+  { key: 'tankiness', label: '承伤', displayLabel: '承伤能力' },
+  { key: 'mid_game', label: '中期', displayLabel: '中期表现' },
+  { key: 'initiation', label: '开团', displayLabel: '开团能力' },
+  { key: 'early_game', label: '前期', displayLabel: '前期表现' },
+  { key: 'map_control', label: '地图控制', displayLabel: '场景控制' },
+  { key: 'damage_output', label: '输出', displayLabel: '输出能力' },
+  { key: 'teamfight', label: '团战', displayLabel: '团战能力' },
+  { key: 'economy', label: '经济', displayLabel: '经济发育' },
+  { key: 'late_game', label: '后期', displayLabel: '后期表现' },
+  { key: 'durability', label: '生存', displayLabel: '生存能力' },
+  { key: 'invasion_ability', label: '入侵', displayLabel: '入侵能力' },
 ];
+
+const DISPLAY_MAX_RANK = 3;
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -136,4 +138,35 @@ function buildAbilityRefs(abilities, { maxDims = 4 } = {}) {
   return refs;
 }
 
-module.exports = { DIMENSIONS, normalizeAbilities, buildAbilityRefs };
+/**
+ * 生成前端展示用的紧凑结构：总分/排名 + 位置分榜前 3 名的分项。
+ * 与 buildAbilityRefs 分离：refs 继续承载 AI 可引用的完整分数，展示层不参与校验。
+ * @param {object} abilities normalizeAbilities 的产物
+ */
+function buildAbilityDisplay(abilities) {
+  if (!isObject(abilities)) return null;
+  const rating = toFiniteNumber(abilities.overall_rating);
+  if (rating === null) return null;
+  const position = typeof abilities.position === 'string' ? abilities.position : '';
+  const fields = DIMENSIONS
+    .map(({ key, displayLabel }) => {
+      const dim = isObject(abilities.dimensions) ? abilities.dimensions[key] : null;
+      if (!isObject(dim)) return null;
+      const score = toFiniteNumber(dim.score);
+      const rank = toRank(dim.position_rank);
+      if (score === null || rank === null || rank > DISPLAY_MAX_RANK) return null;
+      return { key, label: displayLabel, score, rank };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.rank - b.rank || b.score - a.score);
+
+  return {
+    score: rating,
+    overall_rank: Number.isInteger(abilities.overall_rank) ? abilities.overall_rank : null,
+    position: position || null,
+    position_rank: Number.isInteger(abilities.position_rank) ? abilities.position_rank : null,
+    fields,
+  };
+}
+
+module.exports = { DIMENSIONS, normalizeAbilities, buildAbilityRefs, buildAbilityDisplay };

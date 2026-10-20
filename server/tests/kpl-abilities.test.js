@@ -3,7 +3,7 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { normalizeAbilities, buildAbilityRefs, DIMENSIONS } = require('../src/lib/kpl-abilities');
+const { normalizeAbilities, buildAbilityRefs, buildAbilityDisplay, DIMENSIONS } = require('../src/lib/kpl-abilities');
 
 // 2026-10-20 上游 abilities.json 的真实字段形状
 const RECORD = {
@@ -129,5 +129,46 @@ describe('buildAbilityRefs', () => {
   test('maxDims 限制分项数量', () => {
     const refs = buildAbilityRefs(normalizeAbilities(PAYLOAD, CONTEXT), { maxDims: 2 });
     assert.strictEqual(refs[1].value, '支援97、开团94');
+  });
+});
+
+describe('buildAbilityDisplay', () => {
+  test('输出总分/排名与位置分榜前3的分项', () => {
+    const display = buildAbilityDisplay(normalizeAbilities(PAYLOAD, CONTEXT));
+    assert.strictEqual(display.score, 93.7);
+    assert.strictEqual(display.overall_rank, 1);
+    assert.strictEqual(display.position, '对抗路');
+    assert.strictEqual(display.position_rank, 1);
+    assert.deepStrictEqual(display.fields.map((field) => [field.key, field.label, field.score, field.rank]), [
+      ['support_ability', '支援能力', 97, 1],
+      ['initiation', '开团能力', 94, 1],
+      ['map_control', '场景控制', 90, 1],
+      ['early_game', '前期表现', 88, 1],
+      ['late_game', '后期表现', 93, 2],
+      ['teamfight', '团战能力', 90, 2],
+      ['invasion_ability', '入侵能力', 86, 2],
+      ['durability', '生存能力', 72, 2],
+      ['damage_output', '输出能力', 93, 3],
+      ['economy', '经济发育', 86, 3],
+    ]);
+  });
+
+  test('排除排名 4 名及以后的分项', () => {
+    const keys = buildAbilityDisplay(normalizeAbilities(PAYLOAD, CONTEXT)).fields.map((field) => field.key);
+    assert.ok(!keys.includes('tankiness'), '承伤第5不应展示');
+    assert.ok(!keys.includes('mid_game'), '中期第4不应展示');
+  });
+
+  test('没有前3分项时保留总分，fields 为空', () => {
+    const abilities = normalizeAbilities(PAYLOAD, CONTEXT);
+    for (const dim of Object.values(abilities.dimensions)) dim.position_rank = 4;
+    const display = buildAbilityDisplay(abilities);
+    assert.deepStrictEqual(display.fields, []);
+    assert.strictEqual(display.score, 93.7);
+  });
+
+  test('数据非法或缺少总评分时返回 null', () => {
+    assert.strictEqual(buildAbilityDisplay(null), null);
+    assert.strictEqual(buildAbilityDisplay({}), null);
   });
 });

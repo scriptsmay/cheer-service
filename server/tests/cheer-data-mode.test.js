@@ -98,16 +98,38 @@ describe('buildGroundedSource — 数据模式分支', () => {
 
   test('career / emotion 模式不注入 abilities', () => {
     for (const mode of ['career', 'emotion']) {
-      const labels = buildGroundedSource(OVERVIEW, mode).refs.map((r) => r.label);
+      const source = buildGroundedSource(OVERVIEW, mode);
+      const labels = source.refs.map((r) => r.label);
       assert.ok(!labels.includes('联盟综合评分'), `${mode} 不应引用综合评分`);
       assert.ok(!labels.includes('对抗路分榜第1能力'), `${mode} 不应引用分榜能力`);
+      assert.strictEqual(source.abilitiesDisplay, null, `${mode} 不应输出展示数据`);
     }
   });
 
   test('abilities 赛季与 overview 不一致时不注入', () => {
     const stale = { ...OVERVIEW, abilities: { ...ABILITIES, season: 'KPL2026S1' } };
-    const labels = buildGroundedSource(stale, 'season').refs.map((r) => r.label);
-    assert.ok(!labels.includes('联盟综合评分'));
+    const source = buildGroundedSource(stale, 'season');
+    assert.ok(!source.refs.map((r) => r.label).includes('联盟综合评分'));
+    assert.strictEqual(source.abilitiesDisplay, null);
+  });
+
+  test('season 模式生成紧凑展示数据：总分/排名 + 前3字段', () => {
+    const display = buildGroundedSource(OVERVIEW, 'season').abilitiesDisplay;
+    assert.deepStrictEqual(display, {
+      score: 93.7,
+      overall_rank: 1,
+      position: '对抗路',
+      position_rank: 1,
+      fields: [
+        { key: 'support_ability', label: '支援能力', score: 97, rank: 1 },
+        { key: 'initiation', label: '开团能力', score: 94, rank: 1 },
+        { key: 'map_control', label: '场景控制', score: 90, rank: 1 },
+        { key: 'early_game', label: '前期表现', score: 88, rank: 1 },
+      ],
+    });
+    const keys = display.fields.map((field) => field.key);
+    assert.ok(!keys.includes('tankiness'), '承伤第5不应展示');
+    assert.ok(!keys.includes('mid_game'), '中期第4不应展示');
   });
 
   test('prompt 放行排名表述并保留可引用数据', () => {

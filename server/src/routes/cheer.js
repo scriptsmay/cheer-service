@@ -16,7 +16,7 @@ const { getCheerSettings, getActiveEventsForDate } = require('../services/settin
 const { getDateContext } = require('../lib/date-context');
 const { makeCheckinId } = require('../utils/checkin-summary');
 const { renderTemplate, DEFAULT_PROMPTS } = require('../lib/prompt-template');
-const { buildAbilityRefs } = require('../lib/kpl-abilities');
+const { buildAbilityRefs, buildAbilityDisplay } = require('../lib/kpl-abilities');
 const {
   getRequestId, getClientIp, shanghaiDate, getTimeSlot, normalizeClientId,
   isValidClientId, normalizeRequestId, hashValue, formatRate,
@@ -164,6 +164,7 @@ router.post('/', async (req, res) => {
       emoji_caption: safeOutput.emoji_caption,
       report_id: reportId,
       refs: source.refs,
+      ...(source.abilitiesDisplay ? { abilities_display: source.abilitiesDisplay } : {}),
       source_snapshot_at: sourceSnapshotAt,
     };
 
@@ -434,6 +435,7 @@ router.post('/stream', async (req, res) => {
           emoji_caption: safeOutput.emoji_caption,
           report_id: reportId,
           refs: source.refs,
+          ...(source.abilitiesDisplay ? { abilities_display: source.abilitiesDisplay } : {}),
           source_snapshot_at: sourceSnapshotAt,
         };
 
@@ -600,8 +602,8 @@ async function getLatestOverview() {
 }
 
 function buildGroundedSource(overview, mode = 'season') {
-  if (mode === 'emotion') return { refs: [], snapshotAt: '', promptLines: [] };
-  if (!overview) return { refs: [], snapshotAt: '', promptLines: [] };
+  if (mode === 'emotion') return { refs: [], snapshotAt: '', promptLines: [], abilitiesDisplay: null };
+  if (!overview) return { refs: [], snapshotAt: '', promptLines: [], abilitiesDisplay: null };
   const envelope = isObject(overview.data) ? overview.data : {};
   const data = isObject(envelope.data) ? envelope.data : envelope;
   const seasonId = typeof overview.season === 'string' ? overview.season : '';
@@ -618,8 +620,11 @@ function buildGroundedSource(overview, mode = 'season') {
   heroes.sort((a, b) => Number((b && b.battles) || 0) - Number((a && a.battles) || 0));
   const refs = [];
   // abilities 是赛季维度：仅赛季口径 + 赛季一致时引用；career/emotion 不注入
-  if (seasonStats && isObject(overview.abilities) && overview.abilities.season === seasonId) {
-    for (const ref of buildAbilityRefs(overview.abilities)) refs.push(ref);
+  const abilities = seasonStats && isObject(overview.abilities) && overview.abilities.season === seasonId
+    ? overview.abilities
+    : null;
+  if (abilities) {
+    for (const ref of buildAbilityRefs(abilities)) refs.push(ref);
   }
   addRef(refs, `${statsLabel} KDA`, stats.kda_ratio, 'season_summaries');
   addRef(refs, `${statsLabel}胜率`, formatRate(stats.win_rate), 'season_summaries');
@@ -657,6 +662,7 @@ function buildGroundedSource(overview, mode = 'season') {
     promptLines: trimmedRefs.map((r) => `${r.label}：${r.value}`),
     snapshotAt: normalizeSnapshotAt(rawSnapshotAt),
     statsScope: seasonStats ? 'season' : 'career',
+    abilitiesDisplay: abilities ? buildAbilityDisplay(abilities) : null,
   };
 }
 
