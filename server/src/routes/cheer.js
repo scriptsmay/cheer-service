@@ -12,15 +12,29 @@ const { generateText, generateTextStream } = require('../services/ai');
 const { resolveIdentity } = require('../services/identity');
 const { successResponse, errorResponse } = require('../services/response');
 const { isContentBlocked } = require('../lib/ai-utils');
-const { getCheerSettings, getActiveEventsForDate } = require('../services/settings-store');
+const {
+  getCheerSettings,
+  getActiveEventsForDate,
+} = require('../services/settings-store');
 const { getDateContext } = require('../lib/date-context');
 const { makeCheckinId } = require('../utils/checkin-summary');
 const { renderTemplate, DEFAULT_PROMPTS } = require('../lib/prompt-template');
-const { buildAbilityRefs, buildAbilityDisplay } = require('../lib/kpl-abilities');
 const {
-  getRequestId, getClientIp, shanghaiDate, getTimeSlot, normalizeClientId,
-  isValidClientId, normalizeRequestId, hashValue, formatRate,
-  textLength, isObject,
+  buildAbilityRefs,
+  buildAbilityDisplay,
+} = require('../lib/kpl-abilities');
+const {
+  getRequestId,
+  getClientIp,
+  shanghaiDate,
+  getTimeSlot,
+  normalizeClientId,
+  isValidClientId,
+  normalizeRequestId,
+  hashValue,
+  formatRate,
+  textLength,
+  isObject,
 } = require('../utils/helpers');
 const config = require('../config/env');
 
@@ -38,7 +52,12 @@ const MOOD_PROMPTS = {
   daily: '日常陪伴，轻松有活力。像超话里的自然分享，元气但不刻意喊口号',
   hope: '求胜时刻，热血拉满！用热血坚定的语气给下一场蓄力，气势不能输',
 };
-const MOOD_NAMES = { victory: '胜利', low: '低谷', daily: '日常', hope: '求胜' };
+const MOOD_NAMES = {
+  victory: '胜利',
+  low: '低谷',
+  daily: '日常',
+  hope: '求胜',
+};
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const router = express.Router();
@@ -47,7 +66,7 @@ const router = express.Router();
 // 池中角色可被上下文裁剪：赛事倒数/轻提仅在事件命中时入池；生涯数据仅在可引数据非空时入池
 const CHEER_ROLES = [
   { key: 'daily', label: '日常陪伴' },
-  { key: 'event', label: '赛事倒数' },   // preview 期动态替换为「赛事轻提」
+  { key: 'event', label: '赛事倒数' }, // preview 期动态替换为「赛事轻提」
   { key: 'memory', label: '回忆杀' },
   { key: 'ask', label: '互动提问' },
   { key: 'hype', label: '应援口号' },
@@ -60,19 +79,23 @@ const CHEER_ROLES = [
  * @returns {string[]} 长度为 lineCount 的角色标签序列（第 i 条承担第 i 个角色）
  */
 function assignRoles({ dateStr, lineCount, hasEvent, isPreview, hasStats }) {
-  const pool = CHEER_ROLES
-    .filter((role) => {
-      if (role.key === 'event') return hasEvent;
-      if (role.key === 'stats') return hasStats;
-      return true;
-    })
-    .map((role) => (role.key === 'event' && isPreview ? { ...role, label: '赛事轻提' } : role));
+  const pool = CHEER_ROLES.filter((role) => {
+    if (role.key === 'event') return hasEvent;
+    if (role.key === 'stats') return hasStats;
+    return true;
+  }).map((role) =>
+    role.key === 'event' && isPreview ? { ...role, label: '赛事轻提' } : role,
+  );
   if (!pool.length) return [];
   // 种子 = 日期数字：同一天稳定，隔天位移不同（YYYYMMDD 连续日期模长不同）
   const seed = Number(String(dateStr || '').replace(/-/gu, '')) || 0;
-  const rotated = [...pool.slice(seed % pool.length), ...pool.slice(0, seed % pool.length)];
+  const rotated = [
+    ...pool.slice(seed % pool.length),
+    ...pool.slice(0, seed % pool.length),
+  ];
   const roles = [];
-  for (let i = 0; i < lineCount; i += 1) roles.push(rotated[i % rotated.length].label);
+  for (let i = 0; i < lineCount; i += 1)
+    roles.push(rotated[i % rotated.length].label);
   return roles;
 }
 
@@ -80,19 +103,43 @@ router.post('/', async (req, res) => {
   const requestId = getRequestId(req);
 
   const identity = await resolveIdentity(req);
-  if (!identity.ok) return errorResponse(res, 401, 'SESSION_REQUIRED', '匿名会话无效或已过期', requestId);
+  if (!identity.ok)
+    return errorResponse(
+      res,
+      401,
+      'SESSION_REQUIRED',
+      '匿名会话无效或已过期',
+      requestId,
+    );
 
   const body = req.body || {};
-  const moodInput = typeof body.mood === 'string' ? body.mood.toLowerCase() : 'daily';
+  const moodInput =
+    typeof body.mood === 'string' ? body.mood.toLowerCase() : 'daily';
   const mood = MOOD_ALIASES[moodInput] || moodInput;
   const text = typeof body.text === 'string' ? body.text.trim() : '';
   const clientId = normalizeClientId(body.client_id || body._cid || 'unknown');
 
-  if (!ALLOWED_MOODS.has(mood) || textLength(text) > 120 || !isValidClientId(clientId)) {
-    return errorResponse(res, 400, 'INVALID_ARGUMENT', '心情、补充文字或 client_id 不合法', requestId);
+  if (
+    !ALLOWED_MOODS.has(mood) ||
+    textLength(text) > 120 ||
+    !isValidClientId(clientId)
+  ) {
+    return errorResponse(
+      res,
+      400,
+      'INVALID_ARGUMENT',
+      '心情、补充文字或 client_id 不合法',
+      requestId,
+    );
   }
   if (isContentBlocked(text)) {
-    return errorResponse(res, 451, 'CONTENT_BLOCKED', '补充文字未通过内容安全检查', requestId);
+    return errorResponse(
+      res,
+      451,
+      'CONTENT_BLOCKED',
+      '补充文字未通过内容安全检查',
+      requestId,
+    );
   }
 
   try {
@@ -110,7 +157,7 @@ router.post('/', async (req, res) => {
     if (settings.event_context_enabled !== false) {
       const hits = await getActiveEventsForDate(todayStr);
       if (hits.length) {
-        eventHit = hits[0];        // 主事件（剩余天数最近）
+        eventHit = hits[0]; // 主事件（剩余天数最近）
         eventPhase = eventHit.phase;
       }
     }
@@ -126,11 +173,18 @@ router.post('/', async (req, res) => {
 
     // 事件 refs 注入：仅倒数/临场/当天档进 refs（前端应援卡展示），预热档只在 prompt 轻提
     if (eventPhase && eventPhase.phase !== 'preview' && eventHit) {
-      addRef(source.refs, eventHit.refs_label || '今日赛事', eventHit.refs_value || eventHit.title, 'cheer_events');
+      addRef(
+        source.refs,
+        eventHit.refs_label || '今日赛事',
+        eventHit.refs_value || eventHit.title,
+        'cheer_events',
+      );
       source.promptLines = source.refs.map((r) => `${r.label}：${r.value}`);
     }
 
-    const idempotencyKey = normalizeRequestId(req.headers?.['x-request-id'] || requestId);
+    const idempotencyKey = normalizeRequestId(
+      req.headers?.['x-request-id'] || requestId,
+    );
     const quota = await consumeAiQuota({
       subjectId: identity.subjectId,
       ipHash: hashValue(getClientIp(req), config.ipHashSalt),
@@ -138,20 +192,62 @@ router.post('/', async (req, res) => {
       date: todayStr,
     });
 
-    if (!quota.allowed) return errorResponse(res, 429, 'RATE_LIMITED', '今日应援生成额度已用完', requestId, 86400);
+    if (!quota.allowed)
+      return errorResponse(
+        res,
+        429,
+        'RATE_LIMITED',
+        '今日应援生成额度已用完',
+        requestId,
+        86400,
+      );
     if (quota.response) return successResponse(res, quota.response, requestId);
 
-    const ctx = { dateContext, timeSlot, eventHit, eventPhase, humanizeEnabled, prompts: settings.prompts, recentOpenings, date: todayStr };
-    const generation = await generateValidatedOutput({ mood, text, source, requestId, mode: dataMode, ctx });
+    const ctx = {
+      dateContext,
+      timeSlot,
+      eventHit,
+      eventPhase,
+      humanizeEnabled,
+      prompts: settings.prompts,
+      recentOpenings,
+      date: todayStr,
+    };
+    const generation = await generateValidatedOutput({
+      mood,
+      text,
+      source,
+      requestId,
+      mode: dataMode,
+      ctx,
+    });
     if (!generation.ok) {
       await markReceipt(quota.receiptId, 'failed');
       if (generation.failure.kind === 'blocked_content') {
-        return errorResponse(res, 451, 'CONTENT_BLOCKED', '生成内容未通过安全检查', requestId);
+        return errorResponse(
+          res,
+          451,
+          'CONTENT_BLOCKED',
+          '生成内容未通过安全检查',
+          requestId,
+        );
       }
       if (generation.failure.kind === 'invalid_output') {
-        return errorResponse(res, 503, 'AI_OUTPUT_INVALID', '生成格式不稳定，请稍后重试', requestId);
+        return errorResponse(
+          res,
+          503,
+          'AI_OUTPUT_INVALID',
+          '生成格式不稳定，请稍后重试',
+          requestId,
+        );
       }
-      return errorResponse(res, 503, 'AI_UNAVAILABLE', '文案生成暂时不可用，请稍后重试', requestId);
+      return errorResponse(
+        res,
+        503,
+        'AI_UNAVAILABLE',
+        '文案生成暂时不可用，请稍后重试',
+        requestId,
+      );
     }
 
     const safeOutput = generation.output;
@@ -164,7 +260,9 @@ router.post('/', async (req, res) => {
       emoji_caption: safeOutput.emoji_caption,
       report_id: reportId,
       refs: source.refs,
-      ...(source.abilitiesDisplay ? { abilities_display: source.abilitiesDisplay } : {}),
+      ...(source.abilitiesDisplay
+        ? { abilities_display: source.abilitiesDisplay }
+        : {}),
       source_snapshot_at: sourceSnapshotAt,
     };
 
@@ -195,21 +293,39 @@ router.post('/', async (req, res) => {
       reportDoc.event_phase = eventPhase.phase;
       reportDoc.event_days_until = eventPhase.daysUntil;
     }
-    reportDoc.prompt_version = settings.prompts ? settings.prompts.version || 0 : 0;
+    reportDoc.prompt_version = settings.prompts
+      ? settings.prompts.version || 0
+      : 0;
     if (generation.roles) reportDoc.roles = generation.roles;
-    if (generation.candidates > 1) reportDoc.candidate_count = generation.candidates;
+    if (generation.candidates > 1)
+      reportDoc.candidate_count = generation.candidates;
     await aiReportsCol.doc(reportId).set(reportDoc);
     await linkReportToTodayCheckin(identity.subjectId, reportId);
 
     await commitAiQuota({ pendingCounts: quota.pendingCounts });
 
     const usageCol = await collection('usage_limits');
-    await usageCol.doc(quota.receiptId).update({ status: 'success', response: payload, updated_at: now.toISOString() });
+    await usageCol
+      .doc(quota.receiptId)
+      .update({
+        status: 'success',
+        response: payload,
+        updated_at: now.toISOString(),
+      });
 
     return successResponse(res, payload, requestId);
   } catch {
-    console.error('[ai-cheer] request failed', { requestId, code: 'WRITE_FAILED' });
-    return errorResponse(res, 503, 'WRITE_FAILED', '服务暂时不可用，请稍后重试', requestId);
+    console.error('[ai-cheer] request failed', {
+      requestId,
+      code: 'WRITE_FAILED',
+    });
+    return errorResponse(
+      res,
+      503,
+      'WRITE_FAILED',
+      '服务暂时不可用，请稍后重试',
+      requestId,
+    );
   }
 });
 
@@ -218,7 +334,8 @@ router.post('/', async (req, res) => {
 router.post('/stream', async (req, res) => {
   const requestId = getRequestId(req);
   const requestStartedAt = Date.now();
-  const totalDeadlineAt = requestStartedAt + (config.aiStreamTotalTimeoutMs || 240000);
+  const totalDeadlineAt =
+    requestStartedAt + (config.aiStreamTotalTimeoutMs || 240000);
   const routeDeadline = createRouteDeadline(totalDeadlineAt);
   const observer = createStreamRequestObserver(requestId, requestStartedAt);
   observer.setPhase('auth');
@@ -229,299 +346,429 @@ router.post('/stream', async (req, res) => {
     const identity = await routeDeadline.run(() => resolveIdentity(req));
     if (!identity.ok) {
       observer.setTermination('unauthorized');
-      res.status(401).json({ error: 'SESSION_REQUIRED', message: '匿名会话无效或已过期', request_id: requestId });
+      res
+        .status(401)
+        .json({
+          error: 'SESSION_REQUIRED',
+          message: '匿名会话无效或已过期',
+          request_id: requestId,
+        });
       return;
     }
 
     observer.setPhase('validation');
     const body = req.body || {};
-  const moodInput = typeof body.mood === 'string' ? body.mood.toLowerCase() : 'daily';
-  const mood = MOOD_ALIASES[moodInput] || moodInput;
-  const text = typeof body.text === 'string' ? body.text.trim() : '';
-  const clientId = normalizeClientId(body.client_id || body._cid || 'unknown');
+    const moodInput =
+      typeof body.mood === 'string' ? body.mood.toLowerCase() : 'daily';
+    const mood = MOOD_ALIASES[moodInput] || moodInput;
+    const text = typeof body.text === 'string' ? body.text.trim() : '';
+    const clientId = normalizeClientId(
+      body.client_id || body._cid || 'unknown',
+    );
 
-    if (!ALLOWED_MOODS.has(mood) || textLength(text) > 120 || !isValidClientId(clientId)) {
+    if (
+      !ALLOWED_MOODS.has(mood) ||
+      textLength(text) > 120 ||
+      !isValidClientId(clientId)
+    ) {
       observer.setTermination('invalid_argument');
-      res.status(400).json({ error: 'INVALID_ARGUMENT', message: '心情、补充文字或 client_id 不合法', request_id: requestId });
+      res
+        .status(400)
+        .json({
+          error: 'INVALID_ARGUMENT',
+          message: '心情、补充文字或 client_id 不合法',
+          request_id: requestId,
+        });
       return;
     }
     if (isContentBlocked(text)) {
       observer.setTermination('content_blocked');
-      res.status(451).json({ error: 'CONTENT_BLOCKED', message: '补充文字未通过内容安全检查', request_id: requestId });
+      res
+        .status(451)
+        .json({
+          error: 'CONTENT_BLOCKED',
+          message: '补充文字未通过内容安全检查',
+          request_id: requestId,
+        });
       return;
     }
 
     routeDeadline.throwIfExpired();
 
-  // 设置 SSE 响应头
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'X-Request-Id': requestId,
-    // 禁用压缩，确保每个 chunk 即时推送
-    'X-Accel-Buffering': 'no',
-    'X-Content-Type-Options': 'nosniff',
-  });
+    // 设置 SSE 响应头
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Request-Id': requestId,
+      // 禁用压缩，确保每个 chunk 即时推送
+      'X-Accel-Buffering': 'no',
+      'X-Content-Type-Options': 'nosniff',
+    });
 
-  // 发送初始连接确认
-  res.write(`event: connected\ndata: {"request_id":"${requestId}"}\n\n`);
+    // 发送初始连接确认
+    res.write(`event: connected\ndata: {"request_id":"${requestId}"}\n\n`);
 
-  let retryCount = 0;
-  const MAX_RETRIES = 2;
-  let lastValidationFailure = null;
+    let retryCount = 0;
+    const MAX_RETRIES = 2;
+    let lastValidationFailure = null;
 
-  // 15s 心跳保活，防止 Cloudflare 100s 超时
-  function startKeepalive() {
-    keepaliveTimer = setInterval(() => {
-      if (isFinished) return;
-      res.write(':keepalive\n\n');
-    }, 15000);
-  }
-
-  function stopKeepalive() {
-    if (keepaliveTimer) {
-      clearInterval(keepaliveTimer);
-      keepaliveTimer = null;
+    // 15s 心跳保活，防止 Cloudflare 100s 超时
+    function startKeepalive() {
+      keepaliveTimer = setInterval(() => {
+        if (isFinished) return;
+        res.write(':keepalive\n\n');
+      }, 15000);
     }
-  }
 
-  function sendEvent(event, data) {
-    if (isFinished || routeDeadline.expired()) return;
-    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  }
-
-  async function runGeneration() {
-    try {
-      observer.setPhase('preparation');
-      const settings = await routeDeadline.run(() => getCheerSettings());
-      const dataMode = settings.mode;
-      const overview = dataMode === 'emotion' ? null : await routeDeadline.run(() => getLatestOverview());
-      const source = buildGroundedSource(overview, dataMode);
-      const todayClock = shanghaiDate();
-      const todayStr = todayClock.date;
-      const timeSlot = todayClock.timeSlot;
-
-      let eventHit = null;
-      let eventPhase = null;
-      if (settings.event_context_enabled !== false) {
-        const hits = await routeDeadline.run(() => getActiveEventsForDate(todayStr));
-        if (hits.length) {
-          eventHit = hits[0];
-          eventPhase = eventHit.phase;
-        }
+    function stopKeepalive() {
+      if (keepaliveTimer) {
+        clearInterval(keepaliveTimer);
+        keepaliveTimer = null;
       }
-      let dateContext = null;
-      if (settings.date_context_enabled !== false) {
-        const avoidText = await routeDeadline.run(() => getLastEventText(identity.subjectId));
-        dateContext = getDateContext(todayStr, eventPhase, eventHit, avoidText);
-      }
-      const humanizeEnabled = settings.humanize_enabled !== false;
-      const recentOpenings = await routeDeadline.run(() => getRecentOpenings(identity.subjectId, 14));
+    }
 
-      if (eventPhase && eventPhase.phase !== 'preview' && eventHit) {
-        addRef(source.refs, eventHit.refs_label || '今日赛事', eventHit.refs_value || eventHit.title, 'cheer_events');
-        source.promptLines = source.refs.map((r) => `${r.label}：${r.value}`);
-      }
+    function sendEvent(event, data) {
+      if (isFinished || routeDeadline.expired()) return;
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    }
 
-      const idempotencyKey = normalizeRequestId(req.headers?.['x-request-id'] || requestId);
-      const quota = await routeDeadline.run(() => consumeAiQuota({
-        subjectId: identity.subjectId,
-        ipHash: hashValue(getClientIp(req), config.ipHashSalt),
-        requestId: idempotencyKey,
-        date: todayStr,
-      }));
+    async function runGeneration() {
+      try {
+        observer.setPhase('preparation');
+        const settings = await routeDeadline.run(() => getCheerSettings());
+        const dataMode = settings.mode;
+        const overview =
+          dataMode === 'emotion'
+            ? null
+            : await routeDeadline.run(() => getLatestOverview());
+        const source = buildGroundedSource(overview, dataMode);
+        const todayClock = shanghaiDate();
+        const todayStr = todayClock.date;
+        const timeSlot = todayClock.timeSlot;
 
-      routeDeadline.throwIfExpired();
-
-      if (!quota.allowed) {
-        routeDeadline.throwIfExpired();
-        observer.setTermination('rate_limited');
-        sendEvent('error', { code: 'RATE_LIMITED', message: '今日应援生成额度已用完' });
-        return false;
-      }
-      if (quota.response) {
-        // 已有缓存结果，直接返回
-        routeDeadline.throwIfExpired();
-        observer.setTermination('cached');
-        sendEvent('complete', quota.response);
-        return true;
-      }
-
-      const ctx = { dateContext, timeSlot, eventHit, eventPhase, humanizeEnabled, prompts: settings.prompts, recentOpenings, date: todayStr };
-      const promptCfg = ctx.prompts && typeof ctx.prompts === 'object' ? ctx.prompts : DEFAULT_PROMPTS;
-      const lineCount = Number.isInteger(promptCfg.line_count) ? promptCfg.line_count : CHEER_LINE_COUNT;
-      const roles = assignRoles({
-        dateStr: todayStr,
-        lineCount,
-        hasEvent: Boolean(ctx.eventHit && ctx.eventPhase),
-        isPreview: Boolean(ctx.eventPhase && ctx.eventPhase.phase === 'preview'),
-        hasStats: Array.isArray(source.refs) && source.refs.length > 0,
-      });
-
-      // 构建 prompt
-      const messages = [
-        { role: 'system', content: buildSystemPrompt(mood, source, dataMode, ctx) },
-        { role: 'user', content: buildUserPrompt(mood, text, source, roles, promptCfg) },
-      ];
-      if (lastValidationFailure) {
-        messages.push({ role: 'user', content: buildRetryInstruction(lastValidationFailure, promptCfg) });
-      }
-
-      // 开始流式生成
-      observer.setPhase('generation');
-      let collectedText = '';
-      let collectedReasoning = '';
-      let lastSentLineCount = 0;
-
-      startKeepalive();
-
-      const streamResult = await routeDeadline.run(() => generateTextStream({
-        messages,
-        temperature: 0.85,
-        jsonMode: true,
-        frequency_penalty: promptCfg.frequency_penalty,
-        presence_penalty: promptCfg.presence_penalty,
-        deadlineAt: totalDeadlineAt,
-        onChunk: (chunk) => {
-          if (routeDeadline.expired() || isFinished) return;
-          observer.recordUpstreamChunk(chunk.type);
-          if (chunk.type === 'reasoning') {
-            collectedReasoning += chunk.data;
-            // 只发增量片段，前端自行累计（避免 O(n²) 重复传输）
-            sendEvent('thinking', { text: chunk.data });
-          } else if (chunk.type === 'content') {
-            collectedText += chunk.data;
-            // 只发送新增的行（避免重复累积）
-            const lines = collectedText.split('\n');
-            const newLines = lines.slice(lastSentLineCount);
-            for (const line of newLines) {
-              if (line.trim()) {
-                sendEvent('chunk', { text: line });
-              }
-            }
-            lastSentLineCount = lines.length;
-          } else if (chunk.type === 'keepalive') {
-            // 心跳已在定时器发送，跳过
+        let eventHit = null;
+        let eventPhase = null;
+        if (settings.event_context_enabled !== false) {
+          const hits = await routeDeadline.run(() =>
+            getActiveEventsForDate(todayStr),
+          );
+          if (hits.length) {
+            eventHit = hits[0];
+            eventPhase = eventHit.phase;
           }
-        },
-      }));
-
-      stopKeepalive();
-      observer.recordStreamResult(streamResult);
-      observer.setPhase('validation');
-
-      // 解析并校验完整输出
-      const parsed = parseGeneratedText(collectedText);
-      const validation = inspectGeneratedOutput(parsed, source, {
-        humanize: !ctx || ctx.humanizeEnabled !== false,
-        anchorNumbers: collectAnchorNumbers(ctx, source),
-        line_count: promptCfg.line_count,
-        recentOpenings: Array.isArray(recentOpenings) ? recentOpenings.map((r) => r.opening) : [],
-        timeSlot: ctx && ctx.timeSlot,
-      });
-
-      routeDeadline.throwIfExpired();
-
-      if (validation.ok) {
-        observer.setPhase('persistence');
-        const safeOutput = validation.output;
-        const reportId = randomUUID();
-        const now = new Date();
-        const sourceSnapshotAt = source.snapshotAt || now.toISOString();
-
-        const payload = {
-          lines: safeOutput.lines,
-          emoji_caption: safeOutput.emoji_caption,
-          report_id: reportId,
-          refs: source.refs,
-          ...(source.abilitiesDisplay ? { abilities_display: source.abilitiesDisplay } : {}),
-          source_snapshot_at: sourceSnapshotAt,
-        };
-
-        const aiReportsCol = await routeDeadline.run(() => collection('ai_reports'));
-        const reportDoc = {
-          report_id: reportId,
-          module: 'aiCheer',
-          status: 'active',
-          data_mode: dataMode,
-          subject_id: identity.subjectId,
-          client_id_hash: hashValue(clientId, config.ipHashSalt),
-          user_input: { mood, text_summary: text.slice(0, 40) },
-          ai_output: safeOutput,
-          refs: source.refs,
-          source_snapshot_at: sourceSnapshotAt,
-          timestamp: now.getTime(),
-          created_at: now.toISOString(),
-          expires_at: new Date(now.getTime() + 30 * DAY_MS).toISOString(),
-        };
-        if (dateContext) {
-          reportDoc.date_context = {
-            date_label: dateContext.dateLabel,
-            anchors: dateContext.anchors,
-          };
         }
-        if (eventHit && eventPhase) {
-          reportDoc.event_hit = eventHit._id;
-          reportDoc.event_phase = eventPhase.phase;
-          reportDoc.event_days_until = eventPhase.daysUntil;
+        let dateContext = null;
+        if (settings.date_context_enabled !== false) {
+          const avoidText = await routeDeadline.run(() =>
+            getLastEventText(identity.subjectId),
+          );
+          dateContext = getDateContext(
+            todayStr,
+            eventPhase,
+            eventHit,
+            avoidText,
+          );
         }
-        reportDoc.prompt_version = settings.prompts ? settings.prompts.version || 0 : 0;
-        if (roles) reportDoc.roles = roles;
-        // 思考/生成 token 用量落库（观测思考强度与耗时用）
-        reportDoc.usage = streamResult.usage;
-        await routeDeadline.run(() => aiReportsCol.doc(reportId).set(reportDoc));
-        await routeDeadline.run(() => linkReportToTodayCheckin(identity.subjectId, reportId));
+        const humanizeEnabled = settings.humanize_enabled !== false;
+        const recentOpenings = await routeDeadline.run(() =>
+          getRecentOpenings(identity.subjectId, 14),
+        );
 
-        await routeDeadline.run(() => commitAiQuota({ pendingCounts: quota.pendingCounts }));
+        if (eventPhase && eventPhase.phase !== 'preview' && eventHit) {
+          addRef(
+            source.refs,
+            eventHit.refs_label || '今日赛事',
+            eventHit.refs_value || eventHit.title,
+            'cheer_events',
+          );
+          source.promptLines = source.refs.map((r) => `${r.label}：${r.value}`);
+        }
 
-        const usageCol = await routeDeadline.run(() => collection('usage_limits'));
-        await routeDeadline.run(() => usageCol.doc(quota.receiptId).update({ status: 'success', response: payload, updated_at: now.toISOString() }));
+        const idempotencyKey = normalizeRequestId(
+          req.headers?.['x-request-id'] || requestId,
+        );
+        const quota = await routeDeadline.run(() =>
+          consumeAiQuota({
+            subjectId: identity.subjectId,
+            ipHash: hashValue(getClientIp(req), config.ipHashSalt),
+            requestId: idempotencyKey,
+            date: todayStr,
+          }),
+        );
 
         routeDeadline.throwIfExpired();
-        observer.setTermination('complete');
-        sendEvent('complete', payload);
-        return true;
-      } else {
-        lastValidationFailure = validation;
-        observer.setValidationFailure(validation.reason || validation.kind || 'unknown');
-        console.warn('[ai-cheer] output rejected', { requestId, attempt: retryCount + 1, reason: validation.reason, kind: validation.kind });
-        if (retryCount < MAX_RETRIES) {
-          retryCount += 1;
-          observer.setRetryCount(retryCount);
-          sendEvent('retry', { message: '检测到部分数据偏差，正在为你重新润色...', attempt: retryCount });
-          return await runGeneration();
-        } else {
+
+        if (!quota.allowed) {
           routeDeadline.throwIfExpired();
-          observer.setTermination('output_invalid');
-          sendEvent('error', { code: 'AI_OUTPUT_INVALID', message: '生成格式不稳定，请稍后重试' });
+          observer.setTermination('rate_limited');
+          sendEvent('error', {
+            code: 'RATE_LIMITED',
+            message: '今日应援生成额度已用完',
+          });
           return false;
         }
-      }
-    } catch (error) {
-      observer.recordStreamResult({ model: error && error.model, usage: error && error.usage });
-      const code = mapStreamErrorCode(error);
-      setStreamTermination(observer, code);
-      console.error('[ai-cheer-stream] request failed', { requestId, code });
-      if (routeDeadline.expired()) {
-        if (!res.writableEnded) res.write(`event: error\ndata: ${JSON.stringify({ code, message: getStreamErrorMessage(code) })}\n\n`);
-      } else {
-        sendEvent('error', { code, message: getStreamErrorMessage(code) });
-      }
-      return false;
-    }
-  }
+        if (quota.response) {
+          // 已有缓存结果，直接返回
+          routeDeadline.throwIfExpired();
+          observer.setTermination('cached');
+          sendEvent('complete', quota.response);
+          return true;
+        }
 
-  await runGeneration();
+        const ctx = {
+          dateContext,
+          timeSlot,
+          eventHit,
+          eventPhase,
+          humanizeEnabled,
+          prompts: settings.prompts,
+          recentOpenings,
+          date: todayStr,
+        };
+        const promptCfg =
+          ctx.prompts && typeof ctx.prompts === 'object'
+            ? ctx.prompts
+            : DEFAULT_PROMPTS;
+        const lineCount = Number.isInteger(promptCfg.line_count)
+          ? promptCfg.line_count
+          : CHEER_LINE_COUNT;
+        const roles = assignRoles({
+          dateStr: todayStr,
+          lineCount,
+          hasEvent: Boolean(ctx.eventHit && ctx.eventPhase),
+          isPreview: Boolean(
+            ctx.eventPhase && ctx.eventPhase.phase === 'preview',
+          ),
+          hasStats: Array.isArray(source.refs) && source.refs.length > 0,
+        });
+
+        // 构建 prompt
+        const messages = [
+          {
+            role: 'system',
+            content: buildSystemPrompt(mood, source, dataMode, ctx),
+          },
+          {
+            role: 'user',
+            content: buildUserPrompt(mood, text, source, roles, promptCfg),
+          },
+        ];
+        if (lastValidationFailure) {
+          messages.push({
+            role: 'user',
+            content: buildRetryInstruction(lastValidationFailure, promptCfg),
+          });
+        }
+
+        // 开始流式生成
+        observer.setPhase('generation');
+        let collectedText = '';
+        let collectedReasoning = '';
+        let lastSentLineCount = 0;
+
+        startKeepalive();
+
+        const streamResult = await routeDeadline.run(() =>
+          generateTextStream({
+            messages,
+            temperature: 0.85,
+            jsonMode: true,
+            frequency_penalty: promptCfg.frequency_penalty,
+            presence_penalty: promptCfg.presence_penalty,
+            deadlineAt: totalDeadlineAt,
+            onChunk: (chunk) => {
+              if (routeDeadline.expired() || isFinished) return;
+              observer.recordUpstreamChunk(chunk.type);
+              if (chunk.type === 'reasoning') {
+                collectedReasoning += chunk.data;
+                // 只发增量片段，前端自行累计（避免 O(n²) 重复传输）
+                sendEvent('thinking', { text: chunk.data });
+              } else if (chunk.type === 'content') {
+                collectedText += chunk.data;
+                // 只发送新增的行（避免重复累积）
+                const lines = collectedText.split('\n');
+                const newLines = lines.slice(lastSentLineCount);
+                for (const line of newLines) {
+                  if (line.trim()) {
+                    sendEvent('chunk', { text: line });
+                  }
+                }
+                lastSentLineCount = lines.length;
+              } else if (chunk.type === 'keepalive') {
+                // 心跳已在定时器发送，跳过
+              }
+            },
+          }),
+        );
+
+        stopKeepalive();
+        observer.recordStreamResult(streamResult);
+        observer.setPhase('validation');
+
+        // 解析并校验完整输出
+        const parsed = parseGeneratedText(collectedText);
+        const validation = inspectGeneratedOutput(parsed, source, {
+          humanize: !ctx || ctx.humanizeEnabled !== false,
+          anchorNumbers: collectAnchorNumbers(ctx, source),
+          line_count: promptCfg.line_count,
+          recentOpenings: Array.isArray(recentOpenings)
+            ? recentOpenings.map((r) => r.opening)
+            : [],
+          timeSlot: ctx && ctx.timeSlot,
+        });
+
+        routeDeadline.throwIfExpired();
+
+        if (validation.ok) {
+          observer.setPhase('persistence');
+          const safeOutput = validation.output;
+          const reportId = randomUUID();
+          const now = new Date();
+          const sourceSnapshotAt = source.snapshotAt || now.toISOString();
+
+          const payload = {
+            lines: safeOutput.lines,
+            emoji_caption: safeOutput.emoji_caption,
+            report_id: reportId,
+            refs: source.refs,
+            ...(source.abilitiesDisplay
+              ? { abilities_display: source.abilitiesDisplay }
+              : {}),
+            source_snapshot_at: sourceSnapshotAt,
+          };
+
+          const aiReportsCol = await routeDeadline.run(() =>
+            collection('ai_reports'),
+          );
+          const reportDoc = {
+            report_id: reportId,
+            module: 'aiCheer',
+            status: 'active',
+            data_mode: dataMode,
+            subject_id: identity.subjectId,
+            client_id_hash: hashValue(clientId, config.ipHashSalt),
+            user_input: { mood, text_summary: text.slice(0, 40) },
+            ai_output: safeOutput,
+            refs: source.refs,
+            source_snapshot_at: sourceSnapshotAt,
+            timestamp: now.getTime(),
+            created_at: now.toISOString(),
+            expires_at: new Date(now.getTime() + 30 * DAY_MS).toISOString(),
+          };
+          if (dateContext) {
+            reportDoc.date_context = {
+              date_label: dateContext.dateLabel,
+              anchors: dateContext.anchors,
+            };
+          }
+          if (eventHit && eventPhase) {
+            reportDoc.event_hit = eventHit._id;
+            reportDoc.event_phase = eventPhase.phase;
+            reportDoc.event_days_until = eventPhase.daysUntil;
+          }
+          reportDoc.prompt_version = settings.prompts
+            ? settings.prompts.version || 0
+            : 0;
+          if (roles) reportDoc.roles = roles;
+          // 思考/生成 token 用量落库（观测思考强度与耗时用）
+          reportDoc.usage = streamResult.usage;
+          await routeDeadline.run(() =>
+            aiReportsCol.doc(reportId).set(reportDoc),
+          );
+          await routeDeadline.run(() =>
+            linkReportToTodayCheckin(identity.subjectId, reportId),
+          );
+
+          await routeDeadline.run(() =>
+            commitAiQuota({ pendingCounts: quota.pendingCounts }),
+          );
+
+          const usageCol = await routeDeadline.run(() =>
+            collection('usage_limits'),
+          );
+          await routeDeadline.run(() =>
+            usageCol
+              .doc(quota.receiptId)
+              .update({
+                status: 'success',
+                response: payload,
+                updated_at: now.toISOString(),
+              }),
+          );
+
+          routeDeadline.throwIfExpired();
+          observer.setTermination('complete');
+          sendEvent('complete', payload);
+          return true;
+        } else {
+          lastValidationFailure = validation;
+          observer.setValidationFailure(
+            validation.reason || validation.kind || 'unknown',
+          );
+          console.warn('[ai-cheer] output rejected', {
+            requestId,
+            attempt: retryCount + 1,
+            reason: validation.reason,
+            kind: validation.kind,
+          });
+          if (retryCount < MAX_RETRIES) {
+            retryCount += 1;
+            observer.setRetryCount(retryCount);
+            sendEvent('retry', {
+              message: '检测到部分数据偏差，正在为你重新润色...',
+              attempt: retryCount,
+            });
+            return await runGeneration();
+          } else {
+            routeDeadline.throwIfExpired();
+            observer.setTermination('output_invalid');
+            sendEvent('error', {
+              code: 'AI_OUTPUT_INVALID',
+              message: '生成格式不稳定，请稍后重试',
+            });
+            return false;
+          }
+        }
+      } catch (error) {
+        observer.recordStreamResult({
+          model: error && error.model,
+          usage: error && error.usage,
+        });
+        const code = mapStreamErrorCode(error);
+        setStreamTermination(observer, code);
+        console.error('[ai-cheer-stream] request failed', { requestId, code });
+        if (routeDeadline.expired()) {
+          if (!res.writableEnded)
+            res.write(
+              `event: error\ndata: ${JSON.stringify({ code, message: getStreamErrorMessage(code) })}\n\n`,
+            );
+        } else {
+          sendEvent('error', { code, message: getStreamErrorMessage(code) });
+        }
+        return false;
+      }
+    }
+
+    await runGeneration();
   } catch (error) {
     const code = mapStreamErrorCode(error);
     setStreamTermination(observer, code);
     console.error('[ai-cheer-stream] request failed', { requestId, code });
     if (res.headersSent) {
-      if (!res.writableEnded) res.write(`event: error\ndata: ${JSON.stringify({ code, message: getStreamErrorMessage(code) })}\n\n`);
+      if (!res.writableEnded)
+        res.write(
+          `event: error\ndata: ${JSON.stringify({ code, message: getStreamErrorMessage(code) })}\n\n`,
+        );
     } else {
       const status = code === 'GENERATION_TIMEOUT' ? 504 : 500;
-      res.status(status).json({ error: code, message: getStreamErrorMessage(code), request_id: requestId });
+      res
+        .status(status)
+        .json({
+          error: code,
+          message: getStreamErrorMessage(code),
+          request_id: requestId,
+        });
     }
   } finally {
     const summary = observer.finalize();
@@ -535,60 +782,111 @@ router.post('/stream', async (req, res) => {
 
 // ── 内部函数 ──
 
-async function generateValidatedOutput({ mood, text, source, requestId, mode, ctx }) {
+async function generateValidatedOutput({
+  mood,
+  text,
+  source,
+  requestId,
+  mode,
+  ctx,
+}) {
   // 生效提示词配置：校验/重试口径与 prompt 同源（后台改条数后整链路一致）
-  const promptCfg = ctx && ctx.prompts && typeof ctx.prompts === 'object' ? ctx.prompts : DEFAULT_PROMPTS;
+  const promptCfg =
+    ctx && ctx.prompts && typeof ctx.prompts === 'object'
+      ? ctx.prompts
+      : DEFAULT_PROMPTS;
   // 近 14 天开头指纹去重集合（校验用）；注入列表在 buildSystemPrompt 内另取近 7 天前 10 条
-  const recentOpeningSet = Array.from(new Set(((ctx && ctx.recentOpenings) || []).map((entry) => entry.opening)));
+  const recentOpeningSet = Array.from(
+    new Set(((ctx && ctx.recentOpenings) || []).map((entry) => entry.opening)),
+  );
   // 角色分工（v1.1.0 Task 5）：按日期轮换 + 档位/数据裁剪，重试时保持同一组角色不变
   const roles = assignRoles({
     dateStr: (ctx && ctx.date) || shanghaiDate().date,
-    lineCount: Number.isInteger(promptCfg.line_count) ? promptCfg.line_count : CHEER_LINE_COUNT,
+    lineCount: Number.isInteger(promptCfg.line_count)
+      ? promptCfg.line_count
+      : CHEER_LINE_COUNT,
     hasEvent: Boolean(ctx && ctx.eventHit && ctx.eventPhase),
-    isPreview: Boolean(ctx && ctx.eventPhase && ctx.eventPhase.phase === 'preview'),
+    isPreview: Boolean(
+      ctx && ctx.eventPhase && ctx.eventPhase.phase === 'preview',
+    ),
     hasStats: Array.isArray(source.refs) && source.refs.length > 0,
   });
   let lastFailure = { kind: 'invalid_output', reason: 'not_generated' };
   // 多候选（v1.1.0 Task 6，默认 1）：单次尝试内生成 N 个候选，首个通过校验者胜出（成本 ×N，免费期零负担）
-  const candidateCount = Number.isInteger(promptCfg.candidate_count) && promptCfg.candidate_count >= 1
-    ? Math.min(promptCfg.candidate_count, 3) : 1;
+  const candidateCount =
+    Number.isInteger(promptCfg.candidate_count) &&
+    promptCfg.candidate_count >= 1
+      ? Math.min(promptCfg.candidate_count, 3)
+      : 1;
   for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt += 1) {
     const messages = [
       { role: 'system', content: buildSystemPrompt(mood, source, mode, ctx) },
-      { role: 'user', content: buildUserPrompt(mood, text, source, roles, promptCfg) },
+      {
+        role: 'user',
+        content: buildUserPrompt(mood, text, source, roles, promptCfg),
+      },
     ];
-    if (attempt > 1) messages.push({ role: 'user', content: buildRetryInstruction(lastFailure, promptCfg) });
+    if (attempt > 1)
+      messages.push({
+        role: 'user',
+        content: buildRetryInstruction(lastFailure, promptCfg),
+      });
 
     const candidateResults = [];
     for (let c = 0; c < candidateCount; c += 1) {
       try {
-        candidateResults.push(await generateText({
-          messages,
-          temperature: 0.85,
-          jsonMode: true,
-          frequency_penalty: promptCfg.frequency_penalty,
-          presence_penalty: promptCfg.presence_penalty,
-        }));
+        candidateResults.push(
+          await generateText({
+            messages,
+            temperature: 0.85,
+            jsonMode: true,
+            frequency_penalty: promptCfg.frequency_penalty,
+            presence_penalty: promptCfg.presence_penalty,
+          }),
+        );
       } catch {
         lastFailure = { kind: 'model_error' };
-        console.warn('[ai-cheer] model attempt failed', { requestId, attempt, candidate: c + 1, code: 'MODEL_ATTEMPT_FAILED' });
+        console.warn('[ai-cheer] model attempt failed', {
+          requestId,
+          attempt,
+          candidate: c + 1,
+          code: 'MODEL_ATTEMPT_FAILED',
+        });
       }
     }
     if (!candidateResults.length) continue; // 全部候选模型错误，进入下一次重试
 
     let attemptFailure = null;
     for (const result of candidateResults) {
-      const validation = inspectGeneratedOutput(parseGeneratedText(result && result.text), source, {
-        humanize: !ctx || ctx.humanizeEnabled !== false,
-        anchorNumbers: collectAnchorNumbers(ctx, source),
-        line_count: promptCfg.line_count,
-        recentOpenings: recentOpeningSet,
-        timeSlot: ctx && ctx.timeSlot,
+      const validation = inspectGeneratedOutput(
+        parseGeneratedText(result && result.text),
+        source,
+        {
+          humanize: !ctx || ctx.humanizeEnabled !== false,
+          anchorNumbers: collectAnchorNumbers(ctx, source),
+          line_count: promptCfg.line_count,
+          recentOpenings: recentOpeningSet,
+          timeSlot: ctx && ctx.timeSlot,
+        },
+      );
+      console.log('[ai-cheer] model completed', {
+        requestId,
+        attempt,
+        totalTokens: result?.usage?.total_tokens,
       });
-      console.log('[ai-cheer] model completed', { requestId, attempt, totalTokens: result?.usage?.total_tokens });
-      if (validation.ok) return { ok: true, output: validation.output, roles, candidates: candidateCount };
+      if (validation.ok)
+        return {
+          ok: true,
+          output: validation.output,
+          roles,
+          candidates: candidateCount,
+        };
       attemptFailure = validation;
-      console.warn('[ai-cheer] output rejected', { requestId, attempt, reason: validation.reason });
+      console.warn('[ai-cheer] output rejected', {
+        requestId,
+        attempt,
+        reason: validation.reason,
+      });
     }
     lastFailure = attemptFailure || lastFailure;
   }
@@ -602,52 +900,110 @@ async function getLatestOverview() {
 }
 
 function buildGroundedSource(overview, mode = 'season') {
-  if (mode === 'emotion') return { refs: [], snapshotAt: '', promptLines: [], abilitiesDisplay: null };
-  if (!overview) return { refs: [], snapshotAt: '', promptLines: [], abilitiesDisplay: null };
+  if (mode === 'emotion')
+    return {
+      refs: [],
+      snapshotAt: '',
+      promptLines: [],
+      abilitiesDisplay: null,
+    };
+  if (!overview)
+    return {
+      refs: [],
+      snapshotAt: '',
+      promptLines: [],
+      abilitiesDisplay: null,
+    };
   const envelope = isObject(overview.data) ? overview.data : {};
   const data = isObject(envelope.data) ? envelope.data : envelope;
   const seasonId = typeof overview.season === 'string' ? overview.season : '';
   // career 模式强制走生涯汇总，忽略"当前赛季"口径（选手缺赛期数据已冻结）
-  const seasonStats = mode === 'career'
-    ? null
-    : (Array.isArray(data.season_stats)
-      ? data.season_stats.find((item) => isObject(item) && item.season_id === seasonId)
-      : null);
+  const seasonStats =
+    mode === 'career'
+      ? null
+      : Array.isArray(data.season_stats)
+        ? data.season_stats.find(
+            (item) => isObject(item) && item.season_id === seasonId,
+          )
+        : null;
   const career = isObject(data.career_summary) ? data.career_summary : {};
   const stats = seasonStats || career;
-  const statsLabel = seasonStats ? '当前赛季' : '生涯';
+  const statsLabel = seasonStats ? '赛季' : '生涯';
   const heroes = Array.isArray(data.hero_stats) ? [...data.hero_stats] : [];
-  heroes.sort((a, b) => Number((b && b.battles) || 0) - Number((a && a.battles) || 0));
+  heroes.sort(
+    (a, b) => Number((b && b.battles) || 0) - Number((a && a.battles) || 0),
+  );
   const refs = [];
   // abilities 是赛季维度：仅赛季口径 + 赛季一致时引用；career/emotion 不注入
-  const abilities = seasonStats && isObject(overview.abilities) && overview.abilities.season === seasonId
-    ? overview.abilities
-    : null;
+  const abilities =
+    seasonStats &&
+    isObject(overview.abilities) &&
+    overview.abilities.season === seasonId
+      ? overview.abilities
+      : null;
   if (abilities) {
     for (const ref of buildAbilityRefs(abilities)) refs.push(ref);
   }
   addRef(refs, `${statsLabel} KDA`, stats.kda_ratio, 'season_summaries');
-  addRef(refs, `${statsLabel}胜率`, formatRate(stats.win_rate), 'season_summaries');
-  addRef(refs, `${statsLabel}对局数`, stats.battles ?? stats.total_battles, 'season_summaries');
-  addRef(refs, `${statsLabel} MVP 次数`, stats.mvp ?? stats.mvp_count, 'season_summaries');
+  addRef(
+    refs,
+    `${statsLabel}胜率`,
+    formatRate(stats.win_rate),
+    'season_summaries',
+  );
+  addRef(
+    refs,
+    `${statsLabel}对局数`,
+    stats.battles ?? stats.total_battles,
+    'season_summaries',
+  );
+  addRef(
+    refs,
+    `${statsLabel} MVP 次数`,
+    stats.mvp ?? stats.mvp_count,
+    'season_summaries',
+  );
   addRef(refs, `${statsLabel}场均助攻`, stats.avg_assists, 'season_summaries');
   const heroLabel = '常用英雄（按出场数）';
-  const heroSummary = heroes.filter((item) => isObject(item) && typeof item.hero_name === 'string' && item.hero_name).slice(0, 5).map(formatHeroSummary).join('、');
+  const heroSummary = heroes
+    .filter(
+      (item) =>
+        isObject(item) && typeof item.hero_name === 'string' && item.hero_name,
+    )
+    .slice(0, 5)
+    .map(formatHeroSummary)
+    .join('、');
   addRef(refs, heroLabel, heroSummary, 'season_summaries');
   // 最近一场战报注入：给"赛况向/回忆杀"文案提供具体弹药——对手、比分、每局英雄/KDA/MVP。
   // 缺赛期（career 模式）同样注入：属于"回望生涯高光"，不违反缺赛约束。
-  const recentMatches = Array.isArray(data.recent_matches) ? data.recent_matches : [];
-  const latest = recentMatches.find((m) => m && Array.isArray(m.battles_by_bo) && m.battles_by_bo.length);
+  const recentMatches = Array.isArray(data.recent_matches)
+    ? data.recent_matches
+    : [];
+  const latest = recentMatches.find(
+    (m) => m && Array.isArray(m.battles_by_bo) && m.battles_by_bo.length,
+  );
   if (latest) {
     const games = latest.battles_by_bo
       .filter((g) => g && typeof g.hero_name === 'string' && g.hero_name)
-      .map((g) => `${g.hero_name}${g.kda ? ` ${g.kda}` : ''}${g.is_mvp ? '（MVP）' : ''}`)
+      .map(
+        (g) =>
+          `${g.hero_name}${g.kda ? ` ${g.kda}` : ''}${g.is_mvp ? '（MVP）' : ''}`,
+      )
       .join('、');
     if (games) {
       const datePart = latest.match_date || '';
-      const vsPart = latest.opponent_team_name ? ` vs ${latest.opponent_team_name}` : '';
-      const scorePart = latest.match_score ? ` ${latest.match_score}${latest.match_is_win === true ? '胜' : (latest.match_is_win === false ? '负' : '')}` : '';
-      addRef(refs, '最近一场战报', `${datePart}${vsPart}${scorePart}：${games}`, 'recent_matches');
+      const vsPart = latest.opponent_team_name
+        ? ` vs ${latest.opponent_team_name}`
+        : '';
+      const scorePart = latest.match_score
+        ? ` ${latest.match_score}${latest.match_is_win === true ? '胜' : latest.match_is_win === false ? '负' : ''}`
+        : '';
+      addRef(
+        refs,
+        '最近一场战报',
+        `${datePart}${vsPart}${scorePart}：${games}`,
+        'recent_matches',
+      );
     }
   }
   // 只保留前 9 条数据（原 7 条 + abilities 2 条），避免 prompt 太长
@@ -655,8 +1011,8 @@ function buildGroundedSource(overview, mode = 'season') {
   // career 口径下 overview.updated_at 只代表 season_summaries 文档刷新时间，
   // 不等于生涯数据的截止时间，改用 career_summary 自带时间，没有则留空避免误导
   const rawSnapshotAt = seasonStats
-    ? (overview.updated_at || overview.source_snapshot_at)
-    : (career.updated_at || career.snapshot_at || '');
+    ? overview.updated_at || overview.source_snapshot_at
+    : career.updated_at || career.snapshot_at || '';
   return {
     refs: trimmedRefs,
     promptLines: trimmedRefs.map((r) => `${r.label}：${r.value}`),
@@ -667,7 +1023,8 @@ function buildGroundedSource(overview, mode = 'season') {
 }
 
 function addRef(refs, label, value, source) {
-  if (value === null || value === undefined || value === '' || value === '暂无') return;
+  if (value === null || value === undefined || value === '' || value === '暂无')
+    return;
   refs.push({ label, value: String(value), source });
 }
 
@@ -677,7 +1034,9 @@ function formatHeroSummary(hero) {
   if (Number.isFinite(battles) && battles >= 0) details.push(`${battles}局`);
   const winRate = formatRate(hero.win_rate);
   if (winRate) details.push(`胜率${winRate}`);
-  return details.length ? `${hero.hero_name}（${details.join('，')}）` : hero.hero_name;
+  return details.length
+    ? `${hero.hero_name}（${details.join('，')}）`
+    : hero.hero_name;
 }
 
 const DEFAULT_PROMPT = `
@@ -744,36 +1103,60 @@ function buildSystemPrompt(mood, source, mode = 'season', ctx = {}) {
   const isOffseason = mode === 'career' || mode === 'emotion';
   const moodPrompts = isOffseason ? MOOD_PROMPTS_OFFSEASON : MOOD_PROMPTS;
   // 生效提示词配置（后台可改，含代码默认回退）；条数/字数口径与校验层同源
-  const promptCfg = ctx.prompts && typeof ctx.prompts === 'object' ? ctx.prompts : DEFAULT_PROMPTS;
-  const lineCount = Number.isInteger(promptCfg.line_count) ? promptCfg.line_count : CHEER_LINE_COUNT;
-  const lineMinChars = Number.isInteger(promptCfg.line_min_chars) ? promptCfg.line_min_chars : CHEER_LINE_MIN_CHARS;
+  const promptCfg =
+    ctx.prompts && typeof ctx.prompts === 'object'
+      ? ctx.prompts
+      : DEFAULT_PROMPTS;
+  const lineCount = Number.isInteger(promptCfg.line_count)
+    ? promptCfg.line_count
+    : CHEER_LINE_COUNT;
+  const lineMinChars = Number.isInteger(promptCfg.line_min_chars)
+    ? promptCfg.line_min_chars
+    : CHEER_LINE_MIN_CHARS;
   const renderVars = { line_count: lineCount, line_min_chars: lineMinChars };
   const parts = [renderTemplate(DEFAULT_PROMPT, renderVars).text];
   if (isOffseason) {
     // 事件命中（国家赛事）时用「正向替换」的豁免版约束，保留 KPL 禁令但放行亚运表述
-    parts.push(ctx.eventHit ? OFFSEASON_CONSTRAINT_ASIAN_GAMES : OFFSEASON_CONSTRAINT);
+    parts.push(
+      ctx.eventHit ? OFFSEASON_CONSTRAINT_ASIAN_GAMES : OFFSEASON_CONSTRAINT,
+    );
   }
-  if (ctx.humanizeEnabled !== false) parts.push(renderTemplate(HUMANIZE_GUIDE, renderVars).text);
-  if (Array.isArray(promptCfg.few_shot_examples) && promptCfg.few_shot_examples.length) {
+  if (ctx.humanizeEnabled !== false)
+    parts.push(renderTemplate(HUMANIZE_GUIDE, renderVars).text);
+  if (
+    Array.isArray(promptCfg.few_shot_examples) &&
+    promptCfg.few_shot_examples.length
+  ) {
     // few-shot 示例池（后台标定，0-20 条）：仅语气与角度参考，禁止照抄
-    parts.push(`参考示例（仅语气与角度参考，禁止照抄原文与其中数字）：\n${promptCfg.few_shot_examples.map((s) => `- ${s}`).join('\n')}`);
+    parts.push(
+      `参考示例（仅语气与角度参考，禁止照抄原文与其中数字）：\n${promptCfg.few_shot_examples.map((s) => `- ${s}`).join('\n')}`,
+    );
   }
   // 历史开头避开列表（v1.1.0 Task 4）：近 7 天去重前 10 条，防模型失忆重复起笔
   const recentOpeningsList = dedupeOpenings(ctx.recentOpenings);
   if (recentOpeningsList.length) {
-    parts.push(`以下开头最近用过，请避开（换角度起笔，不要只在开头换几个字）：\n${recentOpeningsList.map((s) => `- ${s}`).join('\n')}`);
+    parts.push(
+      `以下开头最近用过，请避开（换角度起笔，不要只在开头换几个字）：\n${recentOpeningsList.map((s) => `- ${s}`).join('\n')}`,
+    );
   }
   if (ctx.dateContext) {
     // 事件提示三档映射（v1.1.0）：倒数/临场/当天 → 强必含；预热 preview → 轻提软必含；无事件 → 通用软提示
-    const phaseName = ctx.eventHit && ctx.eventPhase ? ctx.eventPhase.phase : null;
-    const isStrong = Boolean(phaseName && ['countdown', 'eve', 'today'].includes(phaseName));
+    const phaseName =
+      ctx.eventHit && ctx.eventPhase ? ctx.eventPhase.phase : null;
+    const isStrong = Boolean(
+      phaseName && ['countdown', 'eve', 'today'].includes(phaseName),
+    );
     const isPreview = phaseName === 'preview';
     const template = isStrong
       ? promptCfg.event_strong_hint
-      : (isPreview ? promptCfg.event_preview_hint : promptCfg.date_context_hint);
+      : isPreview
+        ? promptCfg.event_preview_hint
+        : promptCfg.date_context_hint;
     const eventMinLines = isStrong
       ? promptCfg.event_min_lines_strong
-      : (isPreview ? promptCfg.event_min_lines_preview : 0);
+      : isPreview
+        ? promptCfg.event_min_lines_preview
+        : 0;
     const eventAnchor = ctx.dateContext.anchors.find((a) => a.kind === 'event');
     const rendered = renderTemplate(template, {
       ...renderVars,
@@ -785,32 +1168,59 @@ function buildSystemPrompt(mood, source, mode = 'season', ctx = {}) {
     });
     // 渲染残留（占位符打错）时回退模板原文：保存层已拦截，运行时双保险
     parts.push(
-      `今日背景：${ctx.dateContext.dateLabel}，${ctx.dateContext.anchors.map((a) => a.text).join('；')}\n${rendered.ok ? rendered.text : template}`
+      `今日背景：${ctx.dateContext.dateLabel}，${ctx.dateContext.anchors.map((a) => a.text).join('；')}\n${rendered.ok ? rendered.text : template}`,
     );
   }
-  const timeSlot = ctx && ctx.timeSlot !== undefined ? ctx.timeSlot : getTimeSlot();
+  const timeSlot =
+    ctx && ctx.timeSlot !== undefined ? ctx.timeSlot : getTimeSlot();
   if (timeSlot && timeSlot.promptHint) {
-    parts.push(`时段指引（${timeSlot.timeLabel} ${timeSlot.slotLabel}）：${timeSlot.promptHint}`);
+    parts.push(
+      `时段指引（${timeSlot.timeLabel} ${timeSlot.slotLabel}）：${timeSlot.promptHint}`,
+    );
   }
   parts.push(`语气：${moodPrompts[mood]}`);
-  parts.push(`可引用数据：${source.promptLines.length ? source.promptLines.join('；') : '无，生成纯情绪应援文案'}`);
+  parts.push(
+    `可引用数据：${source.promptLines.length ? source.promptLines.join('；') : '无，生成纯情绪应援文案'}`,
+  );
   const jsonExample = `{"lines":[${Array.from({ length: lineCount }, (_, i) => `"文案${i + 1}"`).join(',')}],"emoji_caption":"配文"}`;
   // 长度要求写进末尾指令行：模型对靠近输出位置的指令更敏感（扩条数后出现"总量守恒、每条变短"的压缩行为）
-  parts.push(`只输出合法 JSON，lines 必须恰好包含 ${lineCount} 个字符串、每条不少于 ${lineMinChars} 个字：${jsonExample}`);
+  parts.push(
+    `只输出合法 JSON，lines 必须恰好包含 ${lineCount} 个字符串、每条不少于 ${lineMinChars} 个字：${jsonExample}`,
+  );
   return parts.join('\n');
 }
 
-function buildUserPrompt(mood, text, source, roles = [], promptCfg = DEFAULT_PROMPTS) {
-  const cfg = promptCfg && typeof promptCfg === 'object' ? promptCfg : DEFAULT_PROMPTS;
-  const lines = [`心情：${MOOD_NAMES[mood]}`, `数据条目数：${source.refs.length}`];
+function buildUserPrompt(
+  mood,
+  text,
+  source,
+  roles = [],
+  promptCfg = DEFAULT_PROMPTS,
+) {
+  const cfg =
+    promptCfg && typeof promptCfg === 'object' ? promptCfg : DEFAULT_PROMPTS;
+  const lines = [
+    `心情：${MOOD_NAMES[mood]}`,
+    `数据条目数：${source.refs.length}`,
+  ];
   if (text) {
     // 用户补充（v1.1.0）：从裸「用户补充：」行升级为可配置指令模板——
     // 明确要求至少一条文案呼应补充内容，否则会被角色分工/格式约束淹没（线上实测无权重感）
-    const rendered = renderTemplate(cfg.user_text_hint || DEFAULT_PROMPTS.user_text_hint, { user_text: text });
-    lines.push(rendered.ok ? rendered.text : renderTemplate(DEFAULT_PROMPTS.user_text_hint, { user_text: text }).text);
+    const rendered = renderTemplate(
+      cfg.user_text_hint || DEFAULT_PROMPTS.user_text_hint,
+      { user_text: text },
+    );
+    lines.push(
+      rendered.ok
+        ? rendered.text
+        : renderTemplate(DEFAULT_PROMPTS.user_text_hint, { user_text: text })
+            .text,
+    );
   }
   if (roles.length) {
-    lines.push(`本组 ${roles.length} 条文案分别承担：${roles.join('；')}。每条聚焦自己的角色展开，角度不要互相重合。`);
+    lines.push(
+      `本组 ${roles.length} 条文案分别承担：${roles.join('；')}。每条聚焦自己的角色展开，角度不要互相重合。`,
+    );
   }
   lines.push('请生成可直接复制发布的应援文案。');
   return lines.join('\n');
@@ -818,14 +1228,25 @@ function buildUserPrompt(mood, text, source, roles = [], promptCfg = DEFAULT_PRO
 
 function parseGeneratedText(text) {
   if (typeof text !== 'string' || !text.trim()) return null;
-  const match = text.replace(/```(?:json)?/giu, '').trim().match(/\{[\s\S]*\}/u);
+  const match = text
+    .replace(/```(?:json)?/giu, '')
+    .trim()
+    .match(/\{[\s\S]*\}/u);
   if (!match) return null;
   try {
     const parsed = JSON.parse(match[0]);
     const lines = Array.isArray(parsed.lines)
-      ? parsed.lines.filter((line) => typeof line === 'string' && line.trim()).map((line) => line.trim())
+      ? parsed.lines
+          .filter((line) => typeof line === 'string' && line.trim())
+          .map((line) => line.trim())
       : [];
-    return { lines, emoji_caption: typeof parsed.emoji_caption === 'string' ? parsed.emoji_caption.trim() : '' };
+    return {
+      lines,
+      emoji_caption:
+        typeof parsed.emoji_caption === 'string'
+          ? parsed.emoji_caption.trim()
+          : '',
+    };
   } catch (_) {
     return null;
   }
@@ -833,29 +1254,53 @@ function parseGeneratedText(text) {
 
 function inspectGeneratedOutput(output, source, opts = {}) {
   // 条数口径与提示词配置同源（后台改条数后校验层同步生效）；硬下限 10 字留代码红线
-  const lineCount = Number.isInteger(opts.line_count) && opts.line_count > 0 ? opts.line_count : CHEER_LINE_COUNT;
-  if (!output || !Array.isArray(output.lines) || output.lines.length !== lineCount) {
+  const lineCount =
+    Number.isInteger(opts.line_count) && opts.line_count > 0
+      ? opts.line_count
+      : CHEER_LINE_COUNT;
+  if (
+    !output ||
+    !Array.isArray(output.lines) ||
+    output.lines.length !== lineCount
+  ) {
     return { ok: false, kind: 'invalid_output', reason: 'line_count' };
   }
   const lineLengths = output.lines.map(textLength);
   if (output.lines.some((line, index) => !line || lineLengths[index] < 10)) {
-    return { ok: false, kind: 'invalid_output', reason: 'line_length', lineLengths };
+    return {
+      ok: false,
+      kind: 'invalid_output',
+      reason: 'line_length',
+      lineLengths,
+    };
   }
-  const allowedNumbers = new Set(source.refs.flatMap((ref) => String(ref.value).match(/\d+(?:\.\d+)?%?/gu) || []));
+  const allowedNumbers = new Set(
+    source.refs.flatMap(
+      (ref) => String(ref.value).match(/\d+(?:\.\d+)?%?/gu) || [],
+    ),
+  );
   // 今日背景锚点（节气/节日/赛事）注入的数字同样视为可引用：
   // 否则 prompt 鼓励的"还有 N 天"倒计时会因 N 不在 refs 里被 ungrounded_number 打回
   for (const number of opts.anchorNumbers || []) allowedNumbers.add(number);
   const unexpectedNumbers = [];
   for (const line of output.lines) {
     const numbers = line.match(/\d+(?:\.\d+)?%?/gu) || [];
-    unexpectedNumbers.push(...numbers.filter((number) => !allowedNumbers.has(number)));
+    unexpectedNumbers.push(
+      ...numbers.filter((number) => !allowedNumbers.has(number)),
+    );
   }
   if (unexpectedNumbers.length) {
-    return { ok: false, kind: 'invalid_output', reason: 'ungrounded_number', unexpectedNumbers };
+    return {
+      ok: false,
+      kind: 'invalid_output',
+      reason: 'ungrounded_number',
+      unexpectedNumbers,
+    };
   }
   // 反 AI 味量化校验（可关）：误伤不阻断服务，只触发重试
   if (opts.humanize !== false) {
-    const timeSlot = opts.timeSlot !== undefined ? opts.timeSlot : getTimeSlot();
+    const timeSlot =
+      opts.timeSlot !== undefined ? opts.timeSlot : getTimeSlot();
     const ai = checkAiFlavor(output.lines, { ...opts, timeSlot });
     if (ai) {
       return { ok: false, kind: 'invalid_output', reason: 'ai_flavor', ai };
@@ -865,16 +1310,35 @@ function inspectGeneratedOutput(output, source, opts = {}) {
   if (Array.isArray(opts.recentOpenings) && opts.recentOpenings.length) {
     const opening = extractOpening(output.lines);
     if (opening && opts.recentOpenings.includes(opening)) {
-      return { ok: false, kind: 'invalid_output', reason: 'repeat_opening', opening };
+      return {
+        ok: false,
+        kind: 'invalid_output',
+        reason: 'repeat_opening',
+        opening,
+      };
     }
   }
   // 传统球类运动词汇（prompt 禁令的代码兜底）：命中即拒并带词重试，不透传给用户
-  const ballSportsTerms = findBallSportsTerms([...output.lines, output.emoji_caption || '']);
+  const ballSportsTerms = findBallSportsTerms([
+    ...output.lines,
+    output.emoji_caption || '',
+  ]);
   if (ballSportsTerms.length) {
-    return { ok: false, kind: 'invalid_output', reason: 'ball_sports_vocab', terms: ballSportsTerms };
+    return {
+      ok: false,
+      kind: 'invalid_output',
+      reason: 'ball_sports_vocab',
+      terms: ballSportsTerms,
+    };
   }
-  const safeOutput = { lines: output.lines, emoji_caption: output.emoji_caption || '⭐️ 并肩前行，为无言加油！' };
-  if (safeOutput.lines.some(isContentBlocked) || isContentBlocked(safeOutput.emoji_caption)) {
+  const safeOutput = {
+    lines: output.lines,
+    emoji_caption: output.emoji_caption || '⭐️ 并肩前行，为无言加油！',
+  };
+  if (
+    safeOutput.lines.some(isContentBlocked) ||
+    isContentBlocked(safeOutput.emoji_caption)
+  ) {
     return { ok: false, kind: 'blocked_content', reason: 'blocked_term' };
   }
   return { ok: true, output: safeOutput };
@@ -889,7 +1353,8 @@ function collectAnchorNumbers(ctx, source) {
       return;
     }
     if (typeof value === 'string') {
-      for (const number of value.match(/\d+(?:\.\d+)?%?/gu) || []) numbers.add(number);
+      for (const number of value.match(/\d+(?:\.\d+)?%?/gu) || [])
+        numbers.add(number);
       return;
     }
     if (Array.isArray(value)) {
@@ -911,9 +1376,28 @@ function collectAnchorNumbers(ctx, source) {
 // 此处与其它禁令（ungrounded_number / ai_flavor / repeat_opening）同构补齐拦截 + 带词重试。
 // 词表只收 KPL/王者荣耀语境不存在的球类用语；合法电竞词汇（赛季/赛程/夺冠/胜率/比赛/赛场/战队等）不在列。
 const BALL_SPORTS_TERMS = [
-  '赢球', '输球', '进球', '失球', '球场', '球赛', '球迷', '球队',
-  '点球', '角球', '越位', '射门', '门将', '红牌', '黄牌', '罚球',
-  '三分球', '篮板', '扣篮', '足球', '篮球', '排球',
+  '赢球',
+  '输球',
+  '进球',
+  '失球',
+  '球场',
+  '球赛',
+  '球迷',
+  '球队',
+  '点球',
+  '角球',
+  '越位',
+  '射门',
+  '门将',
+  '红牌',
+  '黄牌',
+  '罚球',
+  '三分球',
+  '篮板',
+  '扣篮',
+  '足球',
+  '篮球',
+  '排球',
 ];
 
 /** 返回文本中命中的传统球类运动词汇（按词表顺序，供校验拒绝与重试指令引用） */
@@ -951,13 +1435,17 @@ function checkAiFlavor(lines, opts = {}) {
   for (const s of starts) {
     if (!s) continue;
     const n = (seen.get(s) || 0) + 1;
-    if (n >= 3) return { rule: 'same_opening', detail: `句首「${s}」出现 ${n} 次` };
+    if (n >= 3)
+      return { rule: 'same_opening', detail: `句首「${s}」出现 ${n} 次` };
     seen.set(s, n);
   }
   // 4. 抽象词堆叠（文本变长命中概率上升，不同抽象词命中 > 4 拒）
   const hitTerms = ABSTRACT_TERMS.filter((t) => all.includes(t));
   if (hitTerms.length > 4) {
-    return { rule: 'abstract_terms', detail: `抽象词过多：${hitTerms.join('、')}` };
+    return {
+      rule: 'abstract_terms',
+      detail: `抽象词过多：${hitTerms.join('、')}`,
+    };
   }
   // 5. 排比三连句式
   for (const re of PARALLEL_PATTERNS) {
@@ -967,15 +1455,22 @@ function checkAiFlavor(lines, opts = {}) {
   const timeSlot = opts.timeSlot;
   if (timeSlot && timeSlot.slot === 'morning') {
     if (/(?:下班|放学|晚安)/u.test(all)) {
-      return { rule: 'time_slot_mismatch', detail: '上午时段出现下班/晚间词汇' };
+      return {
+        rule: 'time_slot_mismatch',
+        detail: '上午时段出现下班/晚间词汇',
+      };
     }
   }
   return null;
 }
 
 function buildRetryInstruction(failure, promptCfg = {}) {
-  const lineCount = Number.isInteger(promptCfg.line_count) ? promptCfg.line_count : CHEER_LINE_COUNT;
-  const lineMinChars = Number.isInteger(promptCfg.line_min_chars) ? promptCfg.line_min_chars : CHEER_LINE_MIN_CHARS;
+  const lineCount = Number.isInteger(promptCfg.line_count)
+    ? promptCfg.line_count
+    : CHEER_LINE_COUNT;
+  const lineMinChars = Number.isInteger(promptCfg.line_min_chars)
+    ? promptCfg.line_min_chars
+    : CHEER_LINE_MIN_CHARS;
   if (failure.reason === 'line_length') {
     return `上一次 ${lineCount} 条文案的字符数分别为 ${failure.lineLengths.join('、')}，请全部重新生成并确保每条不少于 ${lineMinChars} 个字、尽量写到 30 至 50 个字。不要解释，只输出指定 JSON。`;
   }
@@ -1008,12 +1503,25 @@ async function consumeAiQuota({ subjectId, ipHash, requestId, date }) {
     const col = tc('usage_limits');
     const receiptResult = await col.doc(receiptId).get();
     const receipt = receiptResult.data && receiptResult.data[0];
-    if (receipt) return { allowed: true, receiptId, response: receipt.response || null };
+    if (receipt)
+      return { allowed: true, receiptId, response: receipt.response || null };
 
     const limits = [
-      { id: `aiCheer_user_${hashValue(subjectId)}_${date}`, limit: readLimit('AI_USER_DAILY_LIMIT', 100), dimension: 'user' },
-      { id: `aiCheer_ip_${hashValue(ipHash)}_${date}`, limit: readLimit('AI_IP_DAILY_LIMIT', 30), dimension: 'ip' },
-      { id: `aiCheer_global_${date}`, limit: readLimit('AI_GLOBAL_DAILY_LIMIT', 500), dimension: 'global' },
+      {
+        id: `aiCheer_user_${hashValue(subjectId)}_${date}`,
+        limit: readLimit('AI_USER_DAILY_LIMIT', 100),
+        dimension: 'user',
+      },
+      {
+        id: `aiCheer_ip_${hashValue(ipHash)}_${date}`,
+        limit: readLimit('AI_IP_DAILY_LIMIT', 30),
+        dimension: 'ip',
+      },
+      {
+        id: `aiCheer_global_${date}`,
+        limit: readLimit('AI_GLOBAL_DAILY_LIMIT', 500),
+        dimension: 'global',
+      },
     ];
 
     const current = [];
@@ -1027,8 +1535,11 @@ async function consumeAiQuota({ subjectId, ipHash, requestId, date }) {
 
     const now = new Date().toISOString();
     await col.doc(receiptId).set({
-      module: 'aiCheerRequest', subject_id_hash: hashValue(subjectId, config.ipHashSalt),
-      request_id: requestId, status: 'pending', created_at: now,
+      module: 'aiCheerRequest',
+      subject_id_hash: hashValue(subjectId, config.ipHashSalt),
+      request_id: requestId,
+      status: 'pending',
+      created_at: now,
     });
 
     return { allowed: true, receiptId, pendingCounts: current, response: null };
@@ -1041,8 +1552,12 @@ async function commitAiQuota({ pendingCounts }) {
   const col = await collection('usage_limits');
   for (const item of pendingCounts) {
     await col.doc(item.id).set({
-      module: 'aiCheer', dimension: item.dimension, date: item.date || item.id.split('_').pop(),
-      count: item.count + 1, limit: item.limit, updated_at: now,
+      module: 'aiCheer',
+      dimension: item.dimension,
+      date: item.date || item.id.split('_').pop(),
+      count: item.count + 1,
+      limit: item.limit,
+      updated_at: now,
     });
   }
 }
@@ -1051,8 +1566,10 @@ async function markReceipt(receiptId, status) {
   if (!receiptId) return;
   try {
     const col = await collection('usage_limits');
-    await col.doc(receiptId).update({ status, updated_at: new Date().toISOString() });
-  } catch (_) { }
+    await col
+      .doc(receiptId)
+      .update({ status, updated_at: new Date().toISOString() });
+  } catch (_) {}
 }
 
 // ── regenerate 语义（2026-09-21 拍板）：打卡后当天再生成时，今日打卡改指最新一版文案，
@@ -1061,10 +1578,14 @@ async function linkReportToTodayCheckin(subjectId, reportId) {
   try {
     const checkinId = makeCheckinId(subjectId, shanghaiDate().date);
     const col = await collection('checkins');
-    await col.doc(checkinId).update({ report_id: reportId, updated_at: new Date().toISOString() });
+    await col
+      .doc(checkinId)
+      .update({ report_id: reportId, updated_at: new Date().toISOString() });
   } catch {
     // 打卡关联失败不阻断生成主流程（下次生成会再尝试指向最新）
-    console.warn('[ai-cheer] link report to today checkin failed', { code: 'CHECKIN_LINK_FAILED' });
+    console.warn('[ai-cheer] link report to today checkin failed', {
+      code: 'CHECKIN_LINK_FAILED',
+    });
   }
 }
 
@@ -1075,7 +1596,8 @@ const LAST_EVENT_TEXT_TTL_MS = 5 * 60 * 1000;
 async function getLastEventText(subjectId) {
   try {
     const cached = lastEventTextCache.get(subjectId);
-    if (cached && Date.now() - cached.ts < LAST_EVENT_TEXT_TTL_MS) return cached.text;
+    if (cached && Date.now() - cached.ts < LAST_EVENT_TEXT_TTL_MS)
+      return cached.text;
     const col = await collection('ai_reports');
     const result = await col
       .where({ subject_id: subjectId, event_hit: { $exists: true } })
@@ -1087,8 +1609,12 @@ async function getLastEventText(subjectId) {
     if (doc) {
       const anchors = Array.isArray(doc.date_context)
         ? doc.date_context
-        : (doc.date_context && Array.isArray(doc.date_context.anchors) ? doc.date_context.anchors : []);
-      const eventAnchor = anchors.find((a) => a && a.kind === 'event' && a.text);
+        : doc.date_context && Array.isArray(doc.date_context.anchors)
+          ? doc.date_context.anchors
+          : [];
+      const eventAnchor = anchors.find(
+        (a) => a && a.kind === 'event' && a.text,
+      );
       if (eventAnchor) text = eventAnchor.text;
     }
     lastEventTextCache.set(subjectId, { text, ts: Date.now() });
@@ -1104,7 +1630,7 @@ function readLimit(name, fallback) {
 }
 
 // ── 历史开头指纹（v1.1.0 Task 4 反重复）：注入避开列表 + 校验层拒绝重复开头 ──
-const OPENING_CHARS = 8;                 // 开头指纹长度（前 8 字）
+const OPENING_CHARS = 8; // 开头指纹长度（前 8 字）
 const RECENT_OPENINGS_INJECT_LIMIT = 10; // 注入 prompt 的开头列表上限，防 prompt 膨胀
 
 /**
@@ -1113,7 +1639,9 @@ const RECENT_OPENINGS_INJECT_LIMIT = 10; // 注入 prompt 的开头列表上限�
  * @returns {string} 开头指纹（可能为空串）
  */
 function extractOpening(lines) {
-  const first = Array.isArray(lines) ? lines.find((line) => typeof line === 'string' && line.trim()) : '';
+  const first = Array.isArray(lines)
+    ? lines.find((line) => typeof line === 'string' && line.trim())
+    : '';
   if (!first) return '';
   const normalized = first.replace(LEADING_PUNCT, '').trim();
   return normalized.length >= 4 ? normalized.slice(0, OPENING_CHARS) : '';
@@ -1131,7 +1659,11 @@ async function getRecentOpenings(subjectId, days = 14) {
     const cutoff = new Date(Date.now() - days * DAY_MS).toISOString();
     const col = await collection('ai_reports');
     const result = await col
-      .where({ subject_id: subjectId, module: 'aiCheer', created_at: command.gte(cutoff) })
+      .where({
+        subject_id: subjectId,
+        module: 'aiCheer',
+        created_at: command.gte(cutoff),
+      })
       .orderBy('created_at', 'desc')
       .limit(50)
       .get();
@@ -1161,14 +1693,17 @@ function dedupeOpenings(entries, limit = RECENT_OPENINGS_INJECT_LIMIT) {
 }
 
 function normalizeSnapshotAt(value) {
-  if (typeof value === 'string' && !Number.isNaN(Date.parse(value))) return new Date(value).toISOString();
+  if (typeof value === 'string' && !Number.isNaN(Date.parse(value)))
+    return new Date(value).toISOString();
   if (typeof value === 'number') return new Date(value).toISOString();
   return '';
 }
 
 function mapStreamErrorCode(error) {
-  if (error && error.code === 'AI_STREAM_TOTAL_TIMEOUT') return 'GENERATION_TIMEOUT';
-  if (error && error.code === 'AI_STREAM_IDLE_TIMEOUT') return 'AI_STREAM_IDLE_TIMEOUT';
+  if (error && error.code === 'AI_STREAM_TOTAL_TIMEOUT')
+    return 'GENERATION_TIMEOUT';
+  if (error && error.code === 'AI_STREAM_IDLE_TIMEOUT')
+    return 'AI_STREAM_IDLE_TIMEOUT';
   return 'WRITE_FAILED';
 }
 
@@ -1183,14 +1718,16 @@ function accumulateStreamUsage(target, incoming) {
   const next = target || {};
   for (const field of ['total_tokens', 'prompt_tokens', 'completion_tokens']) {
     const value = Number(incoming[field]);
-    if (Number.isFinite(value) && value >= 0) next[field] = (next[field] || 0) + value;
+    if (Number.isFinite(value) && value >= 0)
+      next[field] = (next[field] || 0) + value;
   }
   return Object.keys(next).length ? next : target;
 }
 
 function setStreamTermination(observer, code) {
   if (code === 'GENERATION_TIMEOUT') observer.setTermination('total_timeout');
-  else if (code === 'AI_STREAM_IDLE_TIMEOUT') observer.setTermination('idle_timeout');
+  else if (code === 'AI_STREAM_IDLE_TIMEOUT')
+    observer.setTermination('idle_timeout');
   else observer.setTermination('error');
 }
 
@@ -1237,16 +1774,19 @@ function createRouteDeadline(deadlineAt) {
           reject(error);
           return;
         }
-        promise.then((value) => {
-          if (pendingReject !== reject) return;
-          pendingReject = null;
-          if (expired) reject(createError());
-          else resolve(value);
-        }, (error) => {
-          if (pendingReject !== reject) return;
-          pendingReject = null;
-          reject(error);
-        });
+        promise.then(
+          (value) => {
+            if (pendingReject !== reject) return;
+            pendingReject = null;
+            if (expired) reject(createError());
+            else resolve(value);
+          },
+          (error) => {
+            if (pendingReject !== reject) return;
+            pendingReject = null;
+            reject(error);
+          },
+        );
       });
     },
     dispose() {
@@ -1261,9 +1801,12 @@ function createRouteDeadline(deadlineAt) {
 async function finalizeGenerationAttempt(summary) {
   if (!summary || !summary.request_id) return;
   const termination = summary.termination || 'error';
-  const status = termination === 'complete'
-    ? 'complete'
-    : (['total_timeout', 'idle_timeout'].includes(termination) ? 'timeout' : 'error');
+  const status =
+    termination === 'complete'
+      ? 'complete'
+      : ['total_timeout', 'idle_timeout'].includes(termination)
+        ? 'timeout'
+        : 'error';
   const attempt = {
     request_id: summary.request_id,
     model: summary.model || null,
@@ -1279,7 +1822,10 @@ async function finalizeGenerationAttempt(summary) {
     const attempts = await collection('ai_generation_attempts');
     await attempts.doc(attempt.request_id).set(attempt);
   } catch (error) {
-    console.warn('[ai-cheer] generation attempt persist failed', { requestId: attempt.request_id, code: 'ATTEMPT_PERSIST_FAILED' });
+    console.warn('[ai-cheer] generation attempt persist failed', {
+      requestId: attempt.request_id,
+      code: 'ATTEMPT_PERSIST_FAILED',
+    });
   }
 }
 
@@ -1317,7 +1863,8 @@ function createStreamRequestObserver(requestId, startedAt, now = Date.now) {
       if (type === 'content') state.contentChunkCount += 1;
     },
     recordStreamResult(result) {
-      if (result && typeof result.model === 'string' && result.model) state.model = result.model;
+      if (result && typeof result.model === 'string' && result.model)
+        state.model = result.model;
       state.usage = accumulateStreamUsage(state.usage, result && result.usage);
     },
     finalize() {
@@ -1335,7 +1882,8 @@ function createStreamRequestObserver(requestId, startedAt, now = Date.now) {
         content_chunks: state.contentChunkCount,
         retry_count: state.retryCount,
       };
-      if (state.validationFailure) summary.validation_failure = state.validationFailure;
+      if (state.validationFailure)
+        summary.validation_failure = state.validationFailure;
       if (state.usage != null) summary.usage = state.usage;
       console.info('[ai-cheer-stream] request summary', summary);
       return summary;
