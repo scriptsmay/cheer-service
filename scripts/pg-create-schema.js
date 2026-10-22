@@ -4,7 +4,7 @@
  * Supabase 建表脚本（v1.3.0 D6）— 幂等，可重复执行
  *
  * 用法: POSTGRES_URI=postgresql://... node scripts/pg-create-schema.js
- * 建独立 schema（默认 cheer，PG_SCHEMA 可覆盖）+ 13 张集合表；
+ * 建独立 schema（默认 cheer，PG_SCHEMA 可覆盖）+ 业务集合表；
  * weekly_story 不建（2026-09-21 拍板清理，不迁移）。
  * 表结构：(_id text PRIMARY KEY, data jsonb)——见 server/src/db/postgres.js。
  */
@@ -29,6 +29,7 @@ const COLLECTIONS = [
   'season_snapshots',
   'sync_snapshots',
   'cheer_events',
+  'cheer_materials',
 ];
 
 async function main() {

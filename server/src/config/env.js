@@ -89,6 +89,10 @@ const config = {
   // Upstash Redis（可选：serverless 多实例共享 IP 限流计数；未配置回退进程内 Map）
   upstashRestUrl: process.env.UPSTASH_REDIS_REST_URL || '',
   upstashRestToken: process.env.UPSTASH_REDIS_REST_TOKEN || '',
+
+  // EasyImage2 图床（Admin 上传中转；token 仅后端可见，禁止下发前端）
+  easyimageBaseUrl: (process.env.EASYIMAGE_BASE_URL || 'https://img2.matishare.com').replace(/\/+$/u, ''),
+  easyimageToken: process.env.EASYIMAGE_TOKEN || '',
 };
 
 module.exports = config;

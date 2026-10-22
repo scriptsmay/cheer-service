@@ -31,8 +31,16 @@ const {
   setCheerEvent,
   deleteCheerEvent,
 } = require('../services/settings-store');
+const multer = require('multer');
 const { collection, command } = require('../db');
 const config = require('../config/env');
+const {
+  listAllMaterials,
+  createMaterial,
+  updateMaterial,
+  deleteMaterial,
+} = require('../services/materials');
+const { uploadToImageHost } = require('../services/image-host');
 
 // kpl-data-daily 手动同步（读取采集产物入库），编排逻辑在 syncKplCrawl 内
 let syncKplCrawl;
@@ -48,6 +56,44 @@ try {
 function requireAuth(req, res, next) {
   if (req.identity && req.identity.ok && req.identity.kind === 'session') return next();
   return res.status(401).json({ code: 'UNAUTHORIZED', message: '请先登录' });
+}
+
+// ── 素材上传（10MB 内存缓冲，仅接受图片，字段名 image）──
+const materialUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 1 },
+  fileFilter(req, file, cb) {
+    if (!/^image\//u.test(file.mimetype)) {
+      const error = new Error('仅支持图片文件');
+      error.code = 'INVALID_FILE_TYPE';
+      return cb(error);
+    }
+    return cb(null, true);
+  },
+});
+
+function materialUploadMiddleware(req, res, next) {
+  materialUpload.single('image')(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ ok: false, error: '图片超过 10MB 限制' });
+    }
+    return res.status(400).json({ ok: false, error: err.message || '上传失败' });
+  });
+}
+
+function parseBoolean(value, fallback) {
+  if (value === true || value === 'true') return true;
+  if (value === false || value === 'false') return false;
+  return fallback;
+}
+
+function materialErrorStatus(err) {
+  if (err.code === 'VALIDATION_ERROR') return 400;
+  if (err.code === 'NOT_FOUND') return 404;
+  if (err.code === 'IMAGE_HOST_NOT_CONFIGURED') return 503;
+  if (err.code === 'IMAGE_HOST_ERROR') return 502;
+  return 500;
 }
 
 const AI_STATS_WINDOWS = {
@@ -459,6 +505,75 @@ router.delete('/cheer/prompts', requireAuth, async (req, res) => {
     res.json({ ok: true, prompts: defaults, version: 0, message: '已恢复代码默认模板' });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── 素材库管理（cheer_materials，需登录）──
+
+// GET /api/admin/materials — 全量素材（含待审核），支持 category / album / enabled 过滤
+router.get('/materials', requireAuth, async (req, res) => {
+  try {
+    const materials = await listAllMaterials({
+      category: typeof req.query.category === 'string' ? req.query.category : '',
+      album: typeof req.query.album === 'string' ? req.query.album : '',
+      enabled: parseBoolean(req.query.enabled, undefined),
+    });
+    res.json({ ok: true, materials });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /api/admin/materials — 直链录入（幂等：传入 _id 时已存在则原样返回）
+router.post('/materials', requireAuth, async (req, res) => {
+  try {
+    const material = await createMaterial(req.body || {});
+    res.status(201).json({ ok: true, material, message: '素材已登记' });
+  } catch (err) {
+    res.status(materialErrorStatus(err)).json({ ok: false, error: err.message });
+  }
+});
+
+// PATCH /api/admin/materials/:id — 更新元数据（分类 / 相册 / 焦点 / 启停等）
+router.patch('/materials/:id', requireAuth, async (req, res) => {
+  try {
+    const material = await updateMaterial(req.params.id, req.body || {});
+    res.json({ ok: true, material, message: '素材已更新' });
+  } catch (err) {
+    res.status(materialErrorStatus(err)).json({ ok: false, error: err.message });
+  }
+});
+
+// DELETE /api/admin/materials/:id — 删除 DB 记录（图床原图保留）
+router.delete('/materials/:id', requireAuth, async (req, res) => {
+  try {
+    await deleteMaterial(req.params.id);
+    res.json({ ok: true, message: '素材已删除' });
+  } catch (err) {
+    res.status(materialErrorStatus(err)).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /api/admin/materials/upload — 本地上传 → EasyImage2 转存 → 入库
+router.post('/materials/upload', requireAuth, materialUploadMiddleware, async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ ok: false, error: '请选择图片文件（字段名 image）' });
+  }
+  try {
+    const uploaded = await uploadToImageHost(req.file.buffer, req.file.originalname, req.file.mimetype);
+    const material = await createMaterial({
+      url: uploaded.url,
+      thumb_url: uploaded.thumbUrl,
+      category: req.body.category,
+      album: req.body.album,
+      source: 'admin_upload',
+      source_url: uploaded.url,
+      focus_y: req.body.focus_y,
+      enabled: parseBoolean(req.body.enabled, true),
+    });
+    res.status(201).json({ ok: true, material, message: '图片已转存图床并存档' });
+  } catch (err) {
+    res.status(materialErrorStatus(err)).json({ ok: false, error: err.message });
   }
 });
 

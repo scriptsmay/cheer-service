@@ -7,8 +7,8 @@
 /* ════════════════════════════════════════════════
  * 3. 外壳 / 路由
  * ════════════════════════════════════════════════ */
-const ROUTES = ['overview', 'ai', 'cheer', 'sync'];
-const ROUTE_TITLES = { overview: '总览', ai: 'AI 服务', cheer: '应援文案', sync: '数据采集' };
+const ROUTES = ['overview', 'ai', 'cheer', 'materials', 'sync'];
+const ROUTE_TITLES = { overview: '总览', ai: 'AI 服务', cheer: '应援文案', materials: '素材管理', sync: '数据采集' };
 function currentRoute() {
   const m = location.hash.match(/^#\/([a-z]+)/);
   return (m && ROUTES.includes(m[1])) ? m[1] : 'overview';
@@ -22,7 +22,7 @@ function renderRoute() {
   });
   ROUTES.forEach((k) => { document.getElementById('view-' + k).hidden = (k !== r); });
   document.title = ROUTE_TITLES[r] + ' · Wuyan Cheer 管理后台';
-  ({ overview: refreshOverview, ai: refreshAISection, cheer: refreshCheerSection, sync: refreshSyncStatus }[r])();
+  ({ overview: refreshOverview, ai: refreshAISection, cheer: refreshCheerSection, materials: refreshMaterials, sync: refreshSyncStatus }[r])();
 }
 window.addEventListener('hashchange', renderRoute);
 
@@ -657,6 +657,263 @@ async function deleteEvent(id) {
 }
 
 /* ════════════════════════════════════════════════
+ * 7.5 素材管理（选手相片背景池）
+ * ════════════════════════════════════════════════ */
+const MATERIAL_SOURCE_LABEL = { weibo_personal: '微博抓取', admin_upload: '后台上传', match_mvp: '赛事 MVP' };
+let materialList = [];
+let materialFormMode = 'upload';
+let focusTarget = null;
+let materialPreviewUrl = '';
+
+function materialThumb(m) { return m.thumb_url || m.url || ''; }
+
+async function refreshMaterials() {
+  const grid = document.getElementById('materialGrid');
+  const countEl = document.getElementById('materialCount');
+  const params = new URLSearchParams();
+  const category = document.getElementById('matFilterCategory').value;
+  const enabled = document.getElementById('matFilterEnabled').value;
+  if (category) params.set('category', category);
+  if (enabled) params.set('enabled', enabled);
+  const qs = params.toString();
+  grid.innerHTML = '<div class="skel material-skel"></div>'.repeat(3);
+  countEl.textContent = '加载中';
+  try {
+    const r = await api('GET', '/api/admin/materials' + (qs ? '?' + qs : ''));
+    if (!r) return;
+    const d = await r.json();
+    if (!d.ok) {
+      grid.innerHTML = '<div class="result error result--flush">加载失败：' + escapeHtml(d.error || '未知错误') + '</div>';
+      countEl.textContent = '-';
+      return;
+    }
+    materialList = Array.isArray(d.materials) ? d.materials : [];
+    renderMaterialGrid(materialList);
+  } catch (e) {
+    grid.innerHTML = '<div class="result error result--flush">网络错误：' + escapeHtml(e.message) + '</div>';
+    countEl.textContent = '-';
+  }
+}
+
+function renderMaterialGrid(list) {
+  const grid = document.getElementById('materialGrid');
+  const countEl = document.getElementById('materialCount');
+  const pending = list.filter((m) => m.enabled !== true).length;
+  countEl.textContent = '共 ' + list.length + ' 条' + (pending ? ' · ' + pending + ' 待审核' : '');
+  if (!list.length) {
+    grid.innerHTML = '<div class="empty material-empty">'
+      + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="M3.5 16.5l4.8-4.3 3.7 3.2 3.2-2.7 5.3 4.4"/></svg>'
+      + '<p class="empty-title">暂无素材</p>'
+      + '<p class="empty-desc">上传图片或登记外链后，会出现在这里</p>'
+      + '</div>';
+    return;
+  }
+  grid.innerHTML = list.map((m) => {
+    const thumb = materialThumb(m);
+    const enabled = m.enabled === true;
+    const created = m.created_at ? formatTime(m.created_at).slice(0, 10) : '-';
+    const focus = Number(m.focus_y ?? 0.5);
+    return '<article class="material-card' + (enabled ? '' : ' is-pending') + '" data-id="' + escapeHtml(m._id) + '">'
+      + '<div class="material-thumb">'
+      + (thumb ? '<img src="' + escapeHtml(thumb) + '" alt="' + escapeHtml(m.category || '素材') + '" loading="lazy" referrerpolicy="no-referrer" />' : '')
+      + '<span class="badge ' + (enabled ? 'badge--success' : 'badge--skipped') + '">' + (enabled ? '已启用' : '待审核') + '</span>'
+      + '</div>'
+      + '<div class="material-body">'
+      + '<div class="material-line1"><span class="material-cat">' + escapeHtml(m.category || '未分类') + '</span></div>'
+      + '<div class="material-meta">' + escapeHtml(MATERIAL_SOURCE_LABEL[m.source] || m.source || '未知来源') + ' · 相册 ' + escapeHtml(m.album || '无言') + '</div>'
+      + '<div class="material-meta">焦点 ' + escapeHtml((Number.isFinite(focus) ? focus : 0.5).toFixed(2)) + ' · ' + escapeHtml(created) + '</div>'
+      + '<div class="material-actions">'
+      + (enabled
+        ? '<button class="btn btn-ghost btn-sm" type="button" data-action="disable">停用</button>'
+        : '<button class="btn btn-primary btn-sm" type="button" data-action="approve">审核通过</button>')
+      + '<button class="btn btn-ghost btn-sm" type="button" data-action="focus">' + ICONS.edit + '焦点</button>'
+      + '<button class="btn btn-danger-ghost btn-sm" type="button" data-action="del">' + ICONS.trash + '删除</button>'
+      + '</div></div></article>';
+  }).join('');
+}
+
+async function patchMaterial(id, body, okMsg) {
+  const r = await api('PATCH', '/api/admin/materials/' + encodeURIComponent(id), body);
+  if (!r) return false;
+  const d = await r.json();
+  if (d.ok) {
+    toast(escapeHtml(d.message || okMsg));
+    refreshMaterials();
+    return true;
+  }
+  toast(escapeHtml(d.error || '操作失败'), 'error');
+  return false;
+}
+
+async function deleteMaterial(id) {
+  const ok = await confirmDanger('删除素材', '仅删除数据库记录，图床原图保留。删除后 C 端不再展示该素材，确认删除？');
+  if (!ok) return;
+  const r = await api('DELETE', '/api/admin/materials/' + encodeURIComponent(id));
+  if (!r) return;
+  const d = await r.json();
+  if (d.ok) {
+    toast(escapeHtml(d.message || '素材已删除'));
+    refreshMaterials();
+  } else {
+    toast(escapeHtml(d.error || '删除失败'), 'error');
+  }
+}
+
+function readFocusValue(inputId) {
+  const v = parseFloat(document.getElementById(inputId).value);
+  if (!Number.isFinite(v)) return 0.5;
+  return Math.round(Math.min(1, Math.max(0, v)) * 100) / 100;
+}
+
+function openFocusEditor(id) {
+  const m = materialList.find((x) => x._id === id);
+  if (!m) return;
+  focusTarget = m;
+  document.getElementById('focusImg').src = materialThumb(m);
+  const raw = Number(m.focus_y ?? 0.5);
+  const value = Math.round(Math.min(1, Math.max(0, Number.isFinite(raw) ? raw : 0.5)) * 100);
+  document.getElementById('focusRange').value = String(value);
+  updateFocusPreview(value);
+  document.getElementById('focusMask').hidden = false;
+}
+
+function updateFocusPreview(value) {
+  const n = Number(value);
+  const v = Math.min(100, Math.max(0, Number.isFinite(n) ? n : 50));
+  document.getElementById('focusImg').style.objectPosition = '50% ' + v + '%';
+  document.getElementById('focusValue').textContent = (v / 100).toFixed(2);
+}
+
+function closeFocusEditor() {
+  document.getElementById('focusMask').hidden = true;
+  focusTarget = null;
+}
+
+async function saveFocus() {
+  if (!focusTarget) return;
+  const value = Number(document.getElementById('focusRange').value);
+  const focusY = Math.round(Math.min(100, Math.max(0, Number.isFinite(value) ? value : 50))) / 100;
+  const id = focusTarget._id;
+  const btn = document.getElementById('focusSaveBtn');
+  btn.disabled = true;
+  const ok = await patchMaterial(id, { focus_y: focusY }, '焦点已保存');
+  btn.disabled = false;
+  if (ok) closeFocusEditor();
+}
+
+function setMaterialFormMode(mode) {
+  materialFormMode = mode === 'link' ? 'link' : 'upload';
+  document.querySelectorAll('[data-mat-mode]').forEach((btn) => {
+    const on = btn.dataset.matMode === materialFormMode;
+    btn.classList.toggle('is-on', on);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  document.getElementById('matUploadForm').hidden = materialFormMode !== 'upload';
+  document.getElementById('matLinkForm').hidden = materialFormMode !== 'link';
+}
+
+function previewMaterialFile() {
+  const input = document.getElementById('matFile');
+  const box = document.getElementById('matFilePreview');
+  const file = input.files && input.files[0];
+  if (materialPreviewUrl) { URL.revokeObjectURL(materialPreviewUrl); materialPreviewUrl = ''; }
+  if (!file) { box.hidden = true; box.innerHTML = ''; return; }
+  materialPreviewUrl = URL.createObjectURL(file);
+  box.innerHTML = '<img src="' + materialPreviewUrl + '" alt="待上传预览" />';
+  box.hidden = false;
+}
+
+function resetMaterialUpload() {
+  document.getElementById('matFile').value = '';
+  if (materialPreviewUrl) { URL.revokeObjectURL(materialPreviewUrl); materialPreviewUrl = ''; }
+  const box = document.getElementById('matFilePreview');
+  box.innerHTML = '';
+  box.hidden = true;
+  document.getElementById('matUploadCategory').value = '单人照';
+  document.getElementById('matUploadAlbum').value = '无言';
+  document.getElementById('matUploadFocus').value = '0.5';
+  document.getElementById('matUploadEnabled').checked = true;
+}
+
+async function submitMaterialUpload(e) {
+  if (e) e.preventDefault();
+  const file = document.getElementById('matFile').files && document.getElementById('matFile').files[0];
+  if (!file) { toast('请先选择图片文件', 'error'); return; }
+  const form = new FormData();
+  form.append('image', file);
+  form.append('category', document.getElementById('matUploadCategory').value);
+  form.append('album', document.getElementById('matUploadAlbum').value.trim() || '无言');
+  form.append('focus_y', String(readFocusValue('matUploadFocus')));
+  form.append('enabled', document.getElementById('matUploadEnabled').checked ? 'true' : 'false');
+  const btn = document.getElementById('matUploadBtn');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>上传中…';
+  try {
+    // multipart 不能用 api()：它固定 JSON Content-Type，会盖掉浏览器生成的 boundary
+    const t = getToken();
+    const r = await fetch('/api/admin/materials/upload', {
+      method: 'POST',
+      headers: t ? { 'Authorization': 'Bearer ' + t } : {},
+      body: form,
+    });
+    if (r.status === 401) { clearToken(); showLogin(); return; }
+    const d = await r.json();
+    if (d.ok) {
+      toast(escapeHtml(d.message || '图片已转存图床并存档'));
+      resetMaterialUpload();
+      refreshMaterials();
+    } else {
+      toast(escapeHtml(d.error || '上传失败'), 'error');
+    }
+  } catch (err) {
+    toast('上传失败：' + escapeHtml(err.message), 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+function resetMaterialLink() {
+  document.getElementById('matLinkUrl').value = '';
+  document.getElementById('matLinkThumb').value = '';
+  document.getElementById('matLinkCategory').value = '单人照';
+  document.getElementById('matLinkAlbum').value = '无言';
+  document.getElementById('matLinkSource').value = 'admin_upload';
+  document.getElementById('matLinkFocus').value = '0.5';
+  document.getElementById('matLinkEnabled').checked = true;
+}
+
+async function submitMaterialLink(e) {
+  if (e) e.preventDefault();
+  const url = document.getElementById('matLinkUrl').value.trim();
+  if (!url) { toast('请填写图片直链', 'error'); return; }
+  const body = {
+    url,
+    thumb_url: document.getElementById('matLinkThumb').value.trim(),
+    category: document.getElementById('matLinkCategory').value,
+    album: document.getElementById('matLinkAlbum').value.trim() || '无言',
+    source: document.getElementById('matLinkSource').value,
+    source_url: url,
+    focus_y: readFocusValue('matLinkFocus'),
+    enabled: document.getElementById('matLinkEnabled').checked,
+  };
+  const btn = document.getElementById('matLinkBtn');
+  btn.disabled = true;
+  const r = await api('POST', '/api/admin/materials', body);
+  btn.disabled = false;
+  if (!r) return;
+  const d = await r.json();
+  if (d.ok) {
+    toast(escapeHtml(d.message || '素材已登记'));
+    resetMaterialLink();
+    refreshMaterials();
+  } else {
+    toast(escapeHtml(d.error || '登记失败'), 'error');
+  }
+}
+
+/* ════════════════════════════════════════════════
  * 8. 数据同步
  * ════════════════════════════════════════════════ */
 async function refreshSyncStatus() {
@@ -801,6 +1058,33 @@ function bindEvents() {
     if (action === 'del') deleteEvent(id);
   });
 
+  document.getElementById('matRefresh').addEventListener('click', refreshMaterials);
+  document.getElementById('matFilterCategory').addEventListener('change', refreshMaterials);
+  document.getElementById('matFilterEnabled').addEventListener('change', refreshMaterials);
+  document.querySelectorAll('[data-mat-mode]').forEach((btn) =>
+    btn.addEventListener('click', () => setMaterialFormMode(btn.dataset.matMode))
+  );
+  document.getElementById('matFile').addEventListener('change', previewMaterialFile);
+  document.getElementById('matUploadForm').addEventListener('submit', submitMaterialUpload);
+  document.getElementById('matLinkForm').addEventListener('submit', submitMaterialLink);
+  document.getElementById('materialGrid').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const card = btn.closest('.material-card');
+    const id = card ? card.dataset.id : '';
+    const action = btn.dataset.action;
+    if (action === 'approve') patchMaterial(id, { enabled: true }, '素材已启用');
+    if (action === 'disable') patchMaterial(id, { enabled: false }, '素材已停用');
+    if (action === 'focus') openFocusEditor(id);
+    if (action === 'del') deleteMaterial(id);
+  });
+  document.getElementById('focusRange').addEventListener('input', (e) => updateFocusPreview(e.target.value));
+  document.getElementById('focusSaveBtn').addEventListener('click', saveFocus);
+  document.getElementById('focusCancelBtn').addEventListener('click', closeFocusEditor);
+  document.getElementById('focusMask').addEventListener('click', (e) => {
+    if (e.target === document.getElementById('focusMask')) closeFocusEditor();
+  });
+
   document.getElementById('crawlBtn').addEventListener('click', triggerCrawl);
   document.getElementById('refreshBtn').addEventListener('click', refreshSyncStatus);
 
@@ -813,7 +1097,11 @@ function bindEvents() {
     if (cbox && !cbox.hidden && !cbox.contains(e.target) && !cbtn.contains(e.target)) hideCurrentModelPicker();
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { hideModelPicker(); hideCurrentModelPicker(); }
+    if (e.key === 'Escape') {
+      hideModelPicker();
+      hideCurrentModelPicker();
+      if (!document.getElementById('focusMask').hidden) closeFocusEditor();
+    }
   });
 }
 

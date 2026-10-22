@@ -23,6 +23,7 @@ const configRoute = require('./routes/config');
 const cheerRoute = require('./routes/cheer');
 const askRoute = require('./routes/ask');
 const checkinRoute = require('./routes/checkin');
+const materialsRoute = require('./routes/materials');
 const adminRoute = require('./routes/admin');
 const cronRoute = require('./routes/cron');
 
@@ -52,6 +53,7 @@ app.use('/api/heroes', heroesRoute);
 app.use('/api/cheer', contentFilterMiddleware, cheerRoute);
 app.use('/api/ask', contentFilterMiddleware, askRoute);
 app.use('/api/checkins', checkinRoute);
+app.use('/api/materials', materialsRoute);
 // 运维接口
 app.use('/api/admin', adminRoute);
 app.use('/api/cron', cronRoute);
