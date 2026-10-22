@@ -40,7 +40,7 @@ const {
   updateMaterial,
   deleteMaterial,
 } = require('../services/materials');
-const { uploadToImageHost } = require('../services/image-host');
+const { uploadToImageHost, buildMaterialImageUrls } = require('../services/image-host');
 
 // kpl-data-daily 手动同步（读取采集产物入库），编排逻辑在 syncKplCrawl 内
 let syncKplCrawl;
@@ -561,9 +561,10 @@ router.post('/materials/upload', requireAuth, materialUploadMiddleware, async (r
   }
   try {
     const uploaded = await uploadToImageHost(req.file.buffer, req.file.originalname, req.file.mimetype);
+    const sized = buildMaterialImageUrls(uploaded.url);
     const material = await createMaterial({
-      url: uploaded.url,
-      thumb_url: uploaded.thumbUrl,
+      url: sized ? sized.url : uploaded.url,
+      thumb_url: sized ? sized.thumbUrl : uploaded.thumbUrl,
       category: req.body.category,
       album: req.body.album,
       source: 'admin_upload',

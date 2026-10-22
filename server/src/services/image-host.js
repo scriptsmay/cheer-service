@@ -70,4 +70,23 @@ async function uploadToImageHost(buffer, filename, mimetype) {
   };
 }
 
-module.exports = { uploadToImageHost };
+/**
+ * 由图床原图地址派生落库用图：卡片图对齐 1080×1440 画布，列表缩略图 3:4。
+ * 非 /i/ 路径无法走 thumb.php，返回 null 由调用方回落原图。
+ */
+function buildMaterialImageUrls(originalUrl) {
+  let path;
+  try {
+    path = new URL(originalUrl).pathname;
+  } catch {
+    return null;
+  }
+  if (!path.startsWith('/i/')) return null;
+  const base = config.easyimageBaseUrl;
+  return {
+    url: `${base}/app/thumb.php?img=${path}&w=1080&q=82`,
+    thumbUrl: `${base}/app/thumb.php?img=${path}&w=258&h=344&q=80`,
+  };
+}
+
+module.exports = { uploadToImageHost, buildMaterialImageUrls };
