@@ -60,8 +60,8 @@ describe('buildGroundedSource — 数据模式分支', () => {
   test('season 模式注入当前赛季数据', () => {
     const source = buildGroundedSource(OVERVIEW, 'season');
     const labels = source.refs.map((r) => r.label);
-    assert.ok(labels.includes('当前赛季 KDA'), '应包含当前赛季 KDA');
-    const kda = source.refs.find((r) => r.label === '当前赛季 KDA');
+    assert.ok(labels.includes('赛季 KDA'), '应包含当前赛季 KDA');
+    const kda = source.refs.find((r) => r.label === '赛季 KDA');
     assert.strictEqual(kda.value, '4.29');
   });
 
@@ -123,7 +123,7 @@ describe('buildGroundedSource — 数据模式分支', () => {
       fields: [
         { key: 'support_ability', label: '支援能力', score: 97, rank: 1 },
         { key: 'initiation', label: '开团能力', score: 94, rank: 1 },
-        { key: 'map_control', label: '场景控制', score: 90, rank: 1 },
+        { key: 'map_control', label: '场面控制', score: 90, rank: 1 },
         { key: 'early_game', label: '前期表现', score: 88, rank: 1 },
       ],
     });

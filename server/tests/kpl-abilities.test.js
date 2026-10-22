@@ -142,7 +142,7 @@ describe('buildAbilityDisplay', () => {
     assert.deepStrictEqual(display.fields.map((field) => [field.key, field.label, field.score, field.rank]), [
       ['support_ability', '支援能力', 97, 1],
       ['initiation', '开团能力', 94, 1],
-      ['map_control', '场景控制', 90, 1],
+      ['map_control', '场面控制', 90, 1],
       ['early_game', '前期表现', 88, 1],
       ['late_game', '后期表现', 93, 2],
       ['teamfight', '团战能力', 90, 2],
